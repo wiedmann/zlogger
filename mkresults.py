@@ -535,11 +535,11 @@ def json_cat(F, key):
         last_ms = e.time_ms
 
         finish = {
-            'timepos': timepos, 'meters': meters,
-            'mwh': mwh, 'duration': e.duration - s.duration,
+            'timepos': timepos, 'meters': r.meters,
+            'mwh': r.mwh, 'duration': e.duration - s.duration,
             'start_msec': s.time_ms, 'end_msec': e.time_ms,
-            'watts': int(watts), 'est_cat': ecat, 'pos': pos,
-            'wkg': float(int(wkg * 100)) / 100,
+            'watts': int(r.watts), 'est_cat': r.ecat, 'pos': pos,
+            'wkg': float(int(r.wkg * 100)) / 100,
             'beg_hr': s.hr, 'end_hr': e.hr }
         entry = { 'rider': r.data(), 'finish': finish }
         cat_finish.append(entry)
