@@ -172,7 +172,7 @@ def main(argv):
         time.sleep(sleepTime)
         sleepTime = retrievalTime - time.time()
     conf.load_chalklines()
-    R = mkresults.get_riders(conf.start_ms - mkresults.min2ms(2.0), conf.finish_ms)
+    R, all_pos = mkresults.get_riders(conf.start_ms - mkresults.min2ms(2.0), conf.finish_ms)
     START_WINDOW = 10.0
     F = [ r for r in R.values() if mkresults.filter_start(r, START_WINDOW) ]
     if g_verbose:
