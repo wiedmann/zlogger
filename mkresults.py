@@ -5,16 +5,13 @@ import sqlite3
 import os, time, stat
 import re
 
-# import requests
-# import lxml.html
-
 RICHMOND_LAP = 16 * 1000                # 1 lap of richmond = 16.09km
 
 class rider():
     def __init__(self, id):
         self.id         = id
         self.pos        = []
-        self.set_info(('Rider', str(id), None, 0, 0, None, None))
+        self.set_info(('Rider', str(id), None, 0, 0, 0, None, None))
         self.has_info   = False
 
         self.finish     = []
@@ -42,8 +39,9 @@ class rider():
         self.cat        = v[2] or 'X'
         self.weight     = v[3]
         self.height     = v[4]
-        self.male       = True if v[5] else False
-        self._power     = v[6] or 0                     # 0 .. 3
+        self.age        = v[5]
+        self.male       = True if v[6] else False
+        self._power     = v[7] or 0                     # 0 .. 3
         self.power      = [ '?', '*', ' ', ' ' ][self._power]
         self.name       = (self.fname + ' ' + self.lname).encode('utf-8')
         self.has_info   = True
@@ -124,9 +122,9 @@ class rider():
     def data(self):
         return {
             'id': self.id, 'fname': self.fname, 'lname': self.lname,
-            'cat': self.cat, 'height': self.height / 10,
-            'weight': float(self.weight) / 1000,
-            'power': self.power,
+            'cat': self.cat, 'height': self.height_cm,
+            'weight': self.weight_kg,
+            'power': self.power_type,
             'male': True if self.male else False }
 
 
@@ -147,11 +145,6 @@ class rider():
     @property
     def sex(self):
         return 'M' if self.male else 'F'
-
-    # XXX unknown...
-    @property
-    def age(self):
-        return 0
 
     @property
     def power_type(self):
@@ -292,9 +285,9 @@ def get_line(name):
 
 
 def rider_info(r):
-    c = dbh.cursor()
+    c = name_dbh.cursor()
     c.execute('select fname, lname, cat, weight, height,' +
-            ' male, zpower from rider' +
+            ' age, male, zpower from rider' +
             ' where rider_id = ?', (r.id,))
     r.set_info(c.fetchone())
 
@@ -414,7 +407,7 @@ def show_results(F, tag):
         return
     grp = F[0].grp
     h0 = ' ' * (N + 36);
-    h0 =  '== START @ %8.8s by %.22s' % (stamp(grp.start_ms),
+    h0 =  '== START @ %s by %.22s' % (hms(grp.start_ms),
             grp.starter.name if grp.starter else 'clock')
     h0 += ' ' + '=' * (N + 18 - len(h0))
     h0 += ' ' * 16
@@ -478,9 +471,10 @@ def results(tag, F):
     print '=' * 10,
     print '%s   %s: %s' % (conf.date, conf.id, conf.name)
     print '=' * 10,
-    print '    start: %s - %s   cutoff: %s  %s' % (hms(conf.start_ms),
-            hms(conf.start_ms + conf.start_window_ms), hms(conf.finish_ms),
-            tzoff)
+    print '     start: %s - %s   grace: %s min' % (hms(conf.start_ms),
+            hms(conf.start_ms + conf.start_window_ms), min_sec(conf.grace_ms))
+    print '=' * 10,
+    print '    cutoff: %s  %s' % (hms(conf.finish_ms), tzoff)
     print '=' * 80
 
     #
@@ -537,21 +531,17 @@ def json_cat(F, key, sprints=None):
     pos = 0
     last_ms = 0
     cat_finish = []
-    for r in F:
-        pos = pos + 1
+    for r in place(F):
         s = r.pos[0]
         e = r.end
 
-        timepos = make_timepos(last_ms, s.time_ms, e.time_ms)
-        last_ms = e.time_ms
-
         finish = {
-            'timepos': timepos, 'meters': r.meters,
+            'timepos': r.timepos, 'meters': r.meters,
             'mwh': r.mwh, 'duration': e.duration - s.duration,
             'start_msec': s.time_ms, 'end_msec': e.time_ms,
-            'watts': int(r.watts), 'est_cat': r.ecat, 'pos': pos,
-            'wkg': float(int(r.wkg * 100)) / 100,
-            'beg_hr': s.hr, 'end_hr': e.hr, 'points': r.points }
+            'watts': r.watts, 'est_cat': r.ecat, 'pos': r.place,
+            'wkg': r.wkg,
+            'beg_hr': s.hr, 'end_hr': e.hr }
         entry = { 'rider': r.data(), 'finish': finish }
         cat_finish.append(entry)
 
@@ -624,15 +614,21 @@ def hms(msec):
     return time.strftime('%H:%M:%S', t)
 
 
+# timestamp msec -> M:S
+def min_sec(msec):
+    t = time.localtime(msec / 1000)
+    return time.strftime('%M:%S', t)
+
+
 # timestamp msec -> H:M:S.frac
 def stamp(msec):
     return hms(msec) + ('.%03d' % (msec % 1000))
 
 
-# elapsed msec -> H:M:S.frac
+# elapsed msec -> H:M:S.f
 def elapsed(msec):
     t = msec_time(msec)
-    return '%02d:%02d:%02d.%03d' % (t.hour, t.min, t.sec, t.msec)
+    return '%02d:%02d:%02d.%d' % (t.hour, t.min, t.sec, t.msec)
 
 
 def avg_pace(start_pos, end_pos):
@@ -693,13 +689,6 @@ def filter_start(r):
     if (args.debug):
         print 'START', r.id, r.pos[0]
 
-    #
-    # DQ any riders who started more than 30 seconds early.
-    #  This catches people from [start-2:00m .. start-30s]
-    #
-#    if (r.pos[0].time_ms < (conf.start_ms - min2ms(0.5))):
-#        t = msec_time(conf.start_ms - r.pos[0].time_ms)
-#        r.set_dq(r.pos[0].time_ms, 'Early: -%2d:%02d' % (t.min, t.sec))
     return True
 
 
@@ -788,7 +777,7 @@ class grp_finish():
         #
         # If jumped before grace period, set DQ (or apply penalty?)
         #
-        if (r.pos[0].time_ms < (grp.start_ms + conf.grace_ms)):
+        if (r.pos[0].time_ms < (grp.start_ms - conf.grace_ms)):
             t = msec_time(conf.start_ms - r.pos[0].time_ms)
             r.set_dq(grp.start_ms, 'Early: -%2d:%02d' % (t.min, t.sec))
 
@@ -1289,11 +1278,13 @@ def mysql(T, F):
 global args
 global conf
 global dbh
+global name_dbh
 
 def main(argv):
     global args
     global conf
     global dbh
+    global name_dbh
 
     parser = argparse.ArgumentParser(description = 'Race Result Generator')
     parser.add_argument('-j', '--json', action='store_true',
@@ -1326,6 +1317,8 @@ def main(argv):
     conf = config(args.config_file)
     dbh = sqlite3.connect('file:%s?mode=ro' % args.database)
     conf.load_chalklines()
+
+    name_dbh = sqlite3.connect('rider_names.sql3')
 
     if (args.debug):
         print "START", 'fwd' if conf.start_forward else 'rev', \
@@ -1368,7 +1361,7 @@ def main(argv):
     # Zwift and writes them into the database.
     #
     if (args.idlist):
-#        L = [ r.id for r in F if r.fname == 'Rider' ]
+#        L = [ r.id for r in F if not r.has_info ]
         L = [ r.id for r in F ]
         print '\n'.join(map(str, L))
         return
@@ -1388,7 +1381,7 @@ def main(argv):
     #
     # Create cat result records.  Riders have records for every cat group.
     #   If the rider's cat is known, the correct record is used.
-    #   When autotecting cat, the highest weighted finish record is used.
+    #   When autodetecting cat, the highest weighted finish record is used.
     #
     for grp in conf.grp:
         if (grp.lead is not None) and (grp.lead in R):
@@ -1444,6 +1437,7 @@ def main(argv):
         results(conf.id, F)
 
     dbh.close()
+    name_dbh.close()
 
 if __name__ == '__main__':
     try:
