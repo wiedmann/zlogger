@@ -99,7 +99,7 @@ class rider():
         #
         if cat is not None:
             cat = cat if cat in 'ABCDW' else None
-        if (cat is not None) and (cat != 'X'):
+        if (self.cat is None or self.cat == 'X') and (cat is not None) and (cat != 'X'):
             self.cat = cat
 
         #
@@ -578,7 +578,10 @@ def dump_json(race_name, start_ms, F, sprints):
         dnf = set([ r for r in L if filter_dnf(r) ])
         finish = set(L).difference(dq).difference(dnf)
         finish = sorted(finish, key = lambda r: r.end_time)
-        cat_sprints = sprints.get(cat, None)
+	if sprints:
+	    cat_sprints = sprints.get(cat, None)
+	else:
+	    cat_sprints = None
         result.append(json_cat(finish, cat, cat_sprints))
         if len(dq):
             finish = sorted(dq, key = lambda r: r.distance)
@@ -1315,7 +1318,7 @@ def main(argv):
     #  until the after the configuration is parsed.
     #
     conf = config(args.config_file)
-    dbh = sqlite3.connect('file:%s?mode=ro' % args.database)
+    dbh = sqlite3.connect(args.database)
     conf.load_chalklines()
 
     name_dbh = sqlite3.connect('rider_names.sql3')
