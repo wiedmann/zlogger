@@ -99,7 +99,8 @@ class rider():
         #
         if cat is not None:
             cat = cat if cat in 'ABCDW' else None
-        if (self.cat is None or self.cat == 'X') and (cat is not None) and (cat != 'X'):
+        if ((self.cat is None) or (self.cat == 'X')) and \
+                ((cat is not None) and (cat != 'X')):
             self.cat = cat
 
         #
@@ -424,7 +425,7 @@ def show_results(F, tag):
         s = r.pos[0]
         e = r.end
 
-        line = ("%2d. %s%c  %-*.*s  %5.1f  %3ld  %4.2f  %c  %3d  %3d %3d" % (
+        line = ("%3d. %s%c %-*.*s  %5.1f  %3ld  %4.2f  %c  %3d  %3d %3d" % (
                 r.place,
                 r.timepos,
                 r.power,
@@ -438,6 +439,9 @@ def show_results(F, tag):
             split = []
             end = r.pos.index(r.end)
             for p in r.pos[1 : end + 1]:
+                # XXX - use same line x for split.
+                if p.line_id != s.line_id:
+                    continue
                 dist = (p.meters - l.meters)
                 msec = (p.time_ms - l.time_ms)
                 pace = (float(dist) / float(msec)) * 3600
@@ -528,8 +532,6 @@ def results(tag, F):
 
 
 def json_cat(F, key, sprints=None):
-    pos = 0
-    last_ms = 0
     cat_finish = []
     for r in place(F):
         s = r.pos[0]
@@ -541,7 +543,7 @@ def json_cat(F, key, sprints=None):
             'start_msec': s.time_ms, 'end_msec': e.time_ms,
             'watts': r.watts, 'est_cat': r.ecat, 'pos': r.place,
             'wkg': r.wkg,
-            'beg_hr': s.hr, 'end_hr': e.hr }
+            'beg_hr': s.hr, 'end_hr': e.hr, 'points': r.points }
         entry = { 'rider': r.data(), 'finish': finish }
         cat_finish.append(entry)
 
@@ -556,12 +558,12 @@ def json_cat(F, key, sprints=None):
 
     sprint_data = []
     if sprints:
-        for i,s in enumerate(sprints):
+        for i, s in enumerate(sprints):
             sprint = {'name': 'sprint %s' % (i + 1),
-                      'results': [{'points': e[0], 'rider_id': e[1].id, 'fname': e[1].fname, 'lname': e[1].lname}
-                                  for e in s]}
+                    'results': [ { 'points': e[0], 'rider_id': e[1].id,
+                    'fname': e[1].fname, 'lname': e[1].lname }
+                    for e in s ] }
             sprint_data.append(sprint)
-
 
     # distance, start_time
 
@@ -578,10 +580,11 @@ def dump_json(race_name, start_ms, F, sprints):
         dnf = set([ r for r in L if filter_dnf(r) ])
         finish = set(L).difference(dq).difference(dnf)
         finish = sorted(finish, key = lambda r: r.end_time)
-	if sprints:
-	    cat_sprints = sprints.get(cat, None)
-	else:
-	    cat_sprints = None
+        result.append(json_cat(finish, cat))
+        if sprints:
+            cat_sprints = sprints.get(cat, None)
+        else:
+            cat_sprints = None
         result.append(json_cat(finish, cat, cat_sprints))
         if len(dq):
             finish = sorted(dq, key = lambda r: r.distance)
@@ -661,11 +664,33 @@ def filter_tag(r, tag):
 def filter_start(r):
     start = None
     for idx, p in enumerate(r.pos):
+
+        # Crossing is outside start window, stop searching.
         if (p.time_ms > (conf.start_ms + conf.start_window_ms)):
             break
-        if (p.line_id == conf.start_line_id) and \
-                (p.forward == conf.start_forward):
+
+        # Skip if this isn't the correct line crossing.
+        if (p.line_id != conf.start_line_id) or \
+                (p.forward != conf.start_forward):
+            continue
+
+        # First crossing seen, take it.
+        if start is None:
             start = idx
+            continue
+
+        # Subsequent crossing.
+        #   - before start window, take it.
+        if (p.time_ms < conf.start_ms):
+            start = idx
+            continue
+
+        # Subsequent crossing.
+        #   - less than 3000 meters later, take it.
+        if ((p.meters - r.pos[start].meters) < 3000):
+            start = idx
+            continue
+
     if start is None:
         return False
 
@@ -837,14 +862,15 @@ def select_finish(r):
     summarize_ride(r)
 
 #
-# Calculate points for each rider by iterating through all the points definitions
+# Calculate points for each rider by iterating through all the points
+# definitions
 # note: only call after select_finish has been called on all riders
 #
 def calculate_points(all_pos, points, points_final):
     points_defs = {}
     cur_defs = {}
     next_defs = {}
-    sprints={}
+    sprints = {}
     sprint_positions = {}
     end_positions = {}
     current_sprints = {}
@@ -867,7 +893,8 @@ def calculate_points(all_pos, points, points_final):
                 if current_sprints.get(r.cat, None):
                     sprints[r.cat].append(current_sprints[r.cat])
                 current_sprints[r.cat] = []
-            if r.end and position.meters < r.end.meters and position.line_id == cur_defs[r.cat].line_id:
+            if r.end and (position.meters < r.end.meters) and \
+                    (position.line_id == cur_defs[r.cat].line_id):
                 place = sprint_positions.get(r.cat, 0) + 1
                 sprint_positions[r.cat] = place
                 if place <= len(cur_defs[r.cat].points):
@@ -876,7 +903,7 @@ def calculate_points(all_pos, points, points_final):
                     if r.cat in current_sprints:
                         current_sprints[r.cat].append((points, r))
                     else:
-                        current_sprints[r.cat]=[(points, r)]
+                        current_sprints[r.cat] = [(points, r)]
             if r.end and position.meters == r.end.meters:
                 place = end_positions.get(r.cat, 0) + 1
                 end_positions[r.cat] = place
@@ -893,6 +920,8 @@ def calculate_points(all_pos, points, points_final):
         if end_sprints.get(cat, None):
             sprints[cat].append(end_sprints[cat])
     return sprints
+
+
 #
 # DNF = valid start, but distance < full distance.
 #  DQ = valid distance, but something went wrong.
@@ -953,7 +982,9 @@ class config_points(object):
         self.forward = True
         self.line = None
         self.distance = None
-        m = re.match('([0-9:]+)\s+(fwd|rev)\s+\{\s*(.+?)\s*\}\s+(km|mi)\s+([0-9\.]+)', val)
+        m = re.match(
+            '([0-9:]+)\s+(fwd|rev)\s+\{\s*(.+?)\s*\}\s+(km|mi)\s+([0-9\.]+)',
+            val)
         if not m:
             sys.exit('Unable to parse points info "%s"' % val)
         pointStrings = m.group(1).split(':')
@@ -961,7 +992,9 @@ class config_points(object):
         self.forward = m.group(2) == 'fwd'
         self.line = m.group(3)
         self.line_id = None
-        self.distance = float(m.group(5)) * (1000 if m.group(4) == 'km' else 1609.34)
+        self.distance = float(m.group(5)) * \
+                (1000 if m.group(4) == 'km' else 1609.34)
+
 
 class config():
     def __init__(self, fname):
@@ -976,6 +1009,7 @@ class config():
         self.corral_line        = None
         self.pace_kmh           = None
         self.cutoff_ms          = None
+        self.lookback_ms        = min2ms(2.0)
         self.grace_ms           = 0
         self.alternate          = None
         self.required_tag       = None
@@ -1007,12 +1041,26 @@ class config():
     def kw_alternate(self, val):
         self.alternate = True
 
+    #
+    # Allow this much of a jump before the official start time.
+    #
     @keyword('GRACE')
     def kw_grace(self, val):
         i = iter(val.split())
         d = dict(zip(i, i))
         if 'min' in d:
             self.grace_ms = strT_to_sec(d['min']) * 1000
+
+    #
+    # Report on riders (likely DQ) who started this early before
+    # the official start time.
+    #
+    @keyword('LOOKBACK')
+    def kw_lookback(self, val):
+        i = iter(val.split())
+        d = dict(zip(i, i))
+        if 'min' in d:
+            self.lookback_ms = strT_to_sec(d['min']) * 1000
 
     @keyword('START')
     def kw_start(self, val):
@@ -1081,7 +1129,7 @@ class config():
         t = time.struct_time((t_day.tm_year, t_day.tm_mon, t_day.tm_mday,
                 t_sec.tm_hour, t_sec.tm_min, t_sec.tm_sec,
                 0, 0, dst))
-        self.start_ms = (int(time.mktime(t)) - off) * 1000
+        self.start_ms = (int(time.mktime(t)) + off) * 1000
         self.date = time.strftime('%Y-%m-%d',
                 time.localtime(self.start_ms / 1000))
 
@@ -1122,6 +1170,7 @@ class config():
                     ((m.distance * 36) / (self.pace_kmh * 10)) * 1000
         else:
             self.finish_ms = self.start_ms + ((2 * 3600) * 1000)
+        self.lookback_ms = max(self.lookback_ms, self.grace_ms)
 
     def parse_line(self, val):
         m = re.match('{\s+(.*)\s+}', val)
@@ -1339,12 +1388,7 @@ def main(argv):
                 time.ctime(conf.finish_ms / 1000)))
         print('time: [%d .. %d]' % (conf.start_ms, conf.finish_ms))
 
-    #
-    # Look back at least 2 minutes just to get riders who cross
-    # over the start line really early.
-    #
-    grace_ms = max(min2ms(2.0), conf.grace_ms)
-    R, all_pos = get_riders(conf.start_ms - grace_ms, conf.finish_ms)
+    R, all_pos = get_riders(conf.start_ms - conf.lookback_ms, conf.finish_ms)
     if (args.debug):
         print 'Selected %d riders' % len(R)
 
