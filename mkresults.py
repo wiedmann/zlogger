@@ -141,7 +141,7 @@ class rider():
     #   truncate to kilograms.
     @property
     def weight_kg(self):
-        return int(self.weight / 1000)
+        return int((self.weight / 100) + .5)/10.0
 
     @property
     def sex(self):
@@ -547,8 +547,9 @@ def json_cat(F, key, sprints=None):
             'start_msec': s.time_ms, 'end_msec': e.time_ms,
             'watts': r.watts, 'est_cat': r.ecat, 'pos': r.place,
             'wkg': r.wkg,
-            'beg_hr': s.hr, 'end_hr': e.hr, 'points': r.points }
-        entry = { 'rider': r.data(), 'finish': finish }
+            'beg_hr': s.hr, 'end_hr': e.hr, 'points': r.points,
+            'dq_time': r.dq_time, 'dq_reason': r.dq_reason}
+        entry = {'rider': r.data(), 'finish': finish }
         cat_finish.append(entry)
 
         if not args.split:
@@ -810,8 +811,9 @@ class grp_finish():
         # If jumped before grace period, set DQ (or apply penalty?)
         #
         if (r.pos[0].time_ms < (grp.start_ms - conf.grace_ms)):
-            t = msec_time(conf.start_ms - r.pos[0].time_ms)
-            r.set_dq(grp.start_ms, 'Early: -%2d:%02d' % (t.min, t.sec))
+            t = msec_time(grp.start_ms - r.pos[0].time_ms)
+            self.dq_time = grp.start_ms
+            self.dq_reason = 'Early: -%2d:%02d' % (t.min, t.sec)
 
 
     #
@@ -887,6 +889,8 @@ def calculate_points(all_pos, points, points_final):
     for p in all_pos:
         (position, r) = p
         if r.cat not in ('A', 'B', 'C', 'D', 'W'):
+            continue
+        if r.dq_time:
             continue
         distance = position.meters - r.pos[0].meters
         if distance >= cur_defs[r.cat].distance:

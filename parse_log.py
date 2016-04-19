@@ -36,16 +36,17 @@ def main(argv):
     parser = argparse.ArgumentParser(description = 'Race Result Generator')
     parser.add_argument('--database', default='race_database.sql3',
         help='Specify destination .sql3 database')
+    parser.add_argument('zlogger_file', help='zlogger log file.')
     args = parser.parse_args()
     dbh = sqlite3.connect(args.database)
     c = dbh.cursor()
 
-    with open(args[0]) as lfile:
+    with open(args.zlogger_file) as lfile:
         loglines = follow(lfile)
         for line in loglines:
             data = json.loads(line)
             if data['e'] == 'LINE':
-                print "Line id %s - %s" % (data['v']['line'], data['v']['data']['name'])
+                print "Line id %s - %s" % (data['v']['line'], data['v']['name'])
             elif data['e'] == 'POS':
                 value = data['v']
                 print "Pos rider id %s - line %s - fwd: %s - m : %s" % (value['id'], value['line'], value['fwd'] == 'true', value['m'])
