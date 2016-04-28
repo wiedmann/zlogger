@@ -11,7 +11,7 @@ class rider():
     def __init__(self, id):
         self.id         = id
         self.pos        = []
-        self.set_info(('Rider', str(id), None, 0, 0, 0, None, None))
+        self.set_info(('Rider', str(id), None, 0, 0, 0, 0, 0))
         self.has_info   = False
 
         self.finish     = []
@@ -37,11 +37,11 @@ class rider():
         self.fname      = v[0]
         self.lname      = v[1]
         self.cat        = v[2] or 'X'
-        self.weight     = v[3]
-        self.height     = v[4]
-        self.age        = v[5]
-        self.male       = True if v[6] else False
-        self._power     = v[7] or 0                     # 0 .. 3
+        self.weight     = int(v[3])
+        self.height     = int(v[4])
+        self.age        = int(v[5])
+        self.male       = True if int(v[6]) else False
+        self._power     = int(v[7]) or 0                     # 0 .. 3
         self.power      = [ '?', '*', ' ', ' ' ][self._power]
         self.name       = (self.fname + ' ' + self.lname).encode('utf-8')
         self.has_info   = True
@@ -232,14 +232,14 @@ def summarize_ride(r):
 class pos():
     def __init__(self, v):
         self.time_ms    = v[0]
-        self.line_id    = v[1]
-        self.forward    = v[2]
-        self.meters     = v[3]
-        self.mwh        = v[4]
-        self.duration   = v[5]
-        self.elevation  = v[6]
-        self.speed      = float((v[7] or 0) / 1000)     # meters/hour
-        self.hr         = v[8]
+        self.line_id    = int(v[1])
+        self.forward    = int(v[2]) == 1
+        self.meters     = float(v[3])
+        self.mwh        = float(v[4])
+        self.duration   = float(v[5])
+        self.elevation  = float(v[6])
+        self.speed      = float((float(v[7]) or 0) / 1000)     # meters/hour
+        self.hr         = float(v[8])
 
     def __str__(self):
         return ("time: %d  %s  line: %d %s  metres: %d" %
@@ -262,10 +262,16 @@ def get_riders(begin_ms, end_ms):
     R = {}
     all_pos = []
     c = dbh.cursor()
-    for data in c.execute('select rider_id, time_ms, line_id, forward,' +
-            ' meters, mwh, duration, elevation, speed, hr from pos' +
-            ' where time_ms between ? and ? order by time_ms asc',
-            (begin_ms, end_ms)):
+    if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
+        query = '''select riderid, msec, lineid, fwd,
+            meters, mwh, duration, elevation, speed, hr from live_results
+            where msec between %s and %s order by msec asc'''
+    else:
+        query = '''select rider_id, time_ms, line_id, forward,
+            meters, mwh, duration, elevation, speed, hr from pos
+            where time_ms between ? and ? order by time_ms asc'''
+    ret = c.execute(query, (begin_ms, end_ms))
+    for data in c.fetchall():
         id = data[0]
         if not id in R:
             R[id] = rider(id)
@@ -282,18 +288,24 @@ def get_riders(begin_ms, end_ms):
 #
 def get_line(name):
     c = dbh.cursor()
-    c.execute('select line_id from chalkline where name = ?', (name,))
+    if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
+        query = 'select line from chalkline where name = %s limit 1'
+    else:
+        query = 'select line_id from chalkline where name = ? limit 1'
+    c.execute(query, (name,))
     data = c.fetchone()
     if not data:
         sys.exit('Could not find line { %s }' % name)
-    return data[0]
+    return int(data[0])
 
 
 def rider_info(r):
     c = name_dbh.cursor()
-    c.execute('select fname, lname, cat, weight, height,' +
-            ' age, male, zpower from rider' +
-            ' where rider_id = ?', (r.id,))
+    if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
+        query = 'select fname, lname, cat, weight, height, age, male, zpower from rider_names where rider_id = %s limit 1'
+    else:
+        query = 'select fname, lname, cat, weight, height, age, male, zpower from rider where rider_id = ? limit 1'
+    c.execute(query, (r.id,))
     r.set_info(c.fetchone())
 
 
@@ -675,6 +687,8 @@ def filter_start(r):
             break
 
         # Skip if this isn't the correct line crossing.
+        if args.debug:
+            print "testing line %s forward %s against %s %s" % (p.line_id, p.forward, conf.start_line_id, conf.start_forward)
         if (p.line_id != conf.start_line_id) or \
                 (p.forward != conf.start_forward):
             continue
@@ -736,18 +750,18 @@ def filter_start(r):
 def trim_course(r):
     forward = conf.start_forward
     for idx, p in enumerate(r.pos[1:]):
-        if (p.line_id != conf.finish_line_id):
-            continue
         if conf.alternate is not None:
             forward = not forward
-        if (p.forward != forward):
-            # crossed finish line in wrong direction
-            # trim the ride.  idx starts at 0, so add one.
-            if (args.debug):
-                print 'WRONG', r.id, '%s' % ('fwd' if forward else 'rev'), p
-            r.set_dq(p.time_ms, "WRONG COURSE")
-            del(r.pos[idx + 1:])
-            break
+	    if (p.forward != forward):
+		# crossed finish line in wrong direction
+		# trim the ride.  idx starts at 0, so add one.
+		if (args.debug):
+		    print 'WRONG', r.id, '%s' % ('fwd' if forward else 'rev'), p
+		r.set_dq(p.time_ms, "WRONG COURSE")
+		del(r.pos[idx + 1:])
+		break
+        if (p.line_id == conf.finish_line_id):
+            continue
     return True
 
 
@@ -1253,7 +1267,7 @@ SUFFIX='''
 #  and the unfiltered rider list.
 #  Creates the database if it does not exist.
 #
-def http(T, F):
+def http(T, F, sprints):
 
     print PREFIX
 #    print TITLE
@@ -1304,7 +1318,7 @@ def http(T, F):
 #
 #  XXX does not drop rows.... need to fix this.
 #
-def mysql(T, F):
+def mysql(T, F, sprints):
     import MySQLdb
 
     msql = MySQLdb.connect(user = T['user'], db = T['db'])
@@ -1334,6 +1348,42 @@ def mysql(T, F):
     msql.commit()
     msql.close()
 
+def ztr_html(T, F, sprints):
+    dnf = set([ r for r in F if r.dnf ])
+    dq  = set([ r for r in F if r.dq ])
+    finish = set(F) - dnf - dq
+
+    print '<table>'
+    for cat in ('W', 'A', 'B', 'C', 'D'):
+        L = [ r for r in finish if r.cat == cat ]
+
+        print '<tr><th colspan=5>Group %s</th></tr>' % cat
+	print '<tr><th>pos</th><th>name</th><th>time</th><th>watts</th><th>w/kg</th></tr>'
+        for r in place(L):
+	    print '<tr><td>%s</td><td>%s %s%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' %(
+		r.place, r.fname.encode('ascii', 'ignore'), r.lname.encode('ascii', 'ignore'), r.power, r.timepos, r.watts, r.wkg)
+    print '</table>'
+
+def zwiftpower(T, F, sprints):
+    dnf = set([ r for r in F if r.dnf ])
+    dq  = set([ r for r in F if r.dq ])
+    finish = set(F) - dnf - dq
+
+    for cat in ('W', 'A', 'B', 'C', 'D'):
+        L = [ r for r in finish if r.cat == cat ]
+	start_time = 0
+
+        for r in place(L):
+	    if start_time == 0:
+		start_time = r.pos[0].time_ms
+	    print '%s %s, 0, %s, %s, %s, %s, %s, %s, %s, %s' %(
+		r.fname.encode('ascii', 'ignore'),
+		r.lname.encode('ascii', 'ignore'),
+		r.id,
+		cat,
+		(r.end.time_ms - start_time)/1000,
+		r.weight/1000., r.height, r.power_type,
+		r.watts, r.end.hr)
 
 global args
 global conf
@@ -1366,6 +1416,10 @@ def main(argv):
     parser.add_argument('--output', help='Output format specification')
     parser.add_argument('-n', '--no_cat', action='store_true',
             help='Do not perform automatic category assignemnts from names')
+    parser.add_argument('-D', '--mysql_database', help='mysql database')
+    parser.add_argument('-H', '--mysql_host', help='mysql host')
+    parser.add_argument('-U', '--mysql_user', help='mysql user')
+    parser.add_argument('-P', '--mysql_password', help='mysql password')
     parser.add_argument('config_file', help='Configuration file for race.')
     args = parser.parse_args()
 
@@ -1374,11 +1428,16 @@ def main(argv):
     #  the database name is configurable.  Delay loading chalklines
     #  until the after the configuration is parsed.
     #
-    conf = config(args.config_file)
-    dbh = sqlite3.connect(args.database)
-    conf.load_chalklines()
+    if args.mysql_user:
+        import mysql.connector
+        dbh = mysql.connector.connect(user=args.mysql_user, host=args.mysql_host, database=args.mysql_database, password=args.mysql_password)
+        name_dbh = dbh
+    else:
+        dbh = sqlite3.connect(args.database)
+        name_dbh = sqlite3.connect('rider_names.sql3')
 
-    name_dbh = sqlite3.connect('rider_names.sql3')
+    conf = config(args.config_file)
+    conf.load_chalklines()
 
     if (args.debug):
         print "START", 'fwd' if conf.start_forward else 'rev', \
@@ -1404,8 +1463,12 @@ def main(argv):
     # Cut rider list down to only those who crossed the start line
     # in the correct direction from the time the race started.
     #
+    if args.debug:
+        print "filtering start line id %s dir %s" % (conf.start_line_id, conf.start_forward)
     F = R.values()
     F = [ r for r in F if filter_start(r) ]
+    if (args.debug):
+        print 'Filtered to %d riders' % len(F)
 
     # pull names from the database.
     [ rider_info(r) for r in F ]
@@ -1482,7 +1545,7 @@ def main(argv):
                 out['output'] not in globals():
             sys.exit('Unknown output function.')
         f = globals()[out['output']]
-        f(out, F)
+        f(out, F, sprints)
         print "Completed output for %s" % (args.output)
         return
 
