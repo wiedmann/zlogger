@@ -5,6 +5,8 @@ import sqlite3
 import os, time, stat
 import re
 
+import dateutil.parser
+
 RICHMOND_LAP = 16 * 1000                # 1 lap of richmond = 16.09km
 
 class rider():
@@ -299,8 +301,7 @@ def get_line(name):
     return int(data[0])
 
 
-def rider_info(r):
-    c = name_dbh.cursor()
+def rider_info(c, r):
     if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
         query = 'select fname, lname, cat, weight, height, age, male, zpower from rider_names where rider_id = %s limit 1'
     else:
@@ -750,18 +751,18 @@ def filter_start(r):
 def trim_course(r):
     forward = conf.start_forward
     for idx, p in enumerate(r.pos[1:]):
+        if not (p.line_id == conf.finish_line_id):
+            continue
         if conf.alternate is not None:
             forward = not forward
-	    if (p.forward != forward):
-		# crossed finish line in wrong direction
-		# trim the ride.  idx starts at 0, so add one.
-		if (args.debug):
-		    print 'WRONG', r.id, '%s' % ('fwd' if forward else 'rev'), p
-		r.set_dq(p.time_ms, "WRONG COURSE")
-		del(r.pos[idx + 1:])
-		break
-        if (p.line_id == conf.finish_line_id):
-            continue
+            if (p.forward != forward):
+                # crossed finish line in wrong direction
+                # trim the ride.  idx starts at 0, so add one.
+                if (args.debug):
+                    print 'WRONG', r.id, '%s' % ('fwd' if forward else 'rev'), p
+                r.set_dq(p.time_ms, "WRONG COURSE")
+                del (r.pos[idx + 1:])
+                break
     return True
 
 
@@ -810,7 +811,8 @@ class grp_finish():
         s = r.pos[0]
         for idx, p in enumerate(r.pos[1:]):
             if ((p.meters - s.meters) >= grp.distance) and \
-                    (p.line_id == conf.finish_line_id):
+                    (p.line_id == conf.finish_line_id) and \
+                    (p.forward == conf.finish_forward):
                 self.pos = p
                 break
 
@@ -1019,10 +1021,11 @@ class config_points(object):
 
 
 class config():
-    def __init__(self, fname):
-        self.id                 = None
-        self.name               = None
-        self.start_ms           = None
+    def __init__(self, fname, start_ms=None, start_date=None, race_id = None, race_name=None):
+        self.id                 = race_id
+        self.name               = race_name
+        self.start_ms           = start_ms
+        self.date               = start_date
         self.finish_ms          = None
         self.start_forward      = None
         self.start_line         = None
@@ -1401,7 +1404,7 @@ def main(argv):
             help='JSON output')
     parser.add_argument('-s', '--split', action='store_true',
             help='Generate split results')
-    parser.add_argument('-I', '--idlist', action='store_true',
+    parser.add_argument('--idlist', action='store_true',
             help='List of IDs that need names')
     parser.add_argument('-d', '--debug', action='store_true',
             help='Debug things')
@@ -1420,6 +1423,9 @@ def main(argv):
     parser.add_argument('-H', '--mysql_host', help='mysql host')
     parser.add_argument('-U', '--mysql_user', help='mysql user')
     parser.add_argument('-P', '--mysql_password', help='mysql password')
+    parser.add_argument('-I', '--race_id', help='race id')
+    parser.add_argument('-T', '--start_time', help='race start time')
+    parser.add_argument('-N', '--race_name', help='race name')
     parser.add_argument('config_file', help='Configuration file for race.')
     args = parser.parse_args()
 
@@ -1436,7 +1442,18 @@ def main(argv):
         dbh = sqlite3.connect(args.database)
         name_dbh = sqlite3.connect('rider_names.sql3')
 
-    conf = config(args.config_file)
+
+    if args.start_time:
+        start_time = dateutil.parser.parse(args.start_time)
+        start_ts = time.mktime(start_time.timetuple())
+        start_ms = start_ts * 1000
+        start_date = time.strftime('%Y-%m-%d', start_time.timetuple())
+    else:
+        start_ms = None
+        start_date = None
+
+    conf = config(args.config_file, race_id=args.race_id, start_ms=start_ms, start_date=start_date,
+                  race_name=args.race_name)
     conf.load_chalklines()
 
     if (args.debug):
@@ -1471,7 +1488,10 @@ def main(argv):
         print 'Filtered to %d riders' % len(F)
 
     # pull names from the database.
-    [ rider_info(r) for r in F ]
+    cursor = name_dbh.cursor()
+    [ rider_info(cursor, r) for r in F ]
+    cursor.close()
+    cursor = None
 
     #
     # dump list of riders needing their names fetched.

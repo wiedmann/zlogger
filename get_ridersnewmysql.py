@@ -311,7 +311,7 @@ def get_rider_list(dbh):
 
 def get_rider_list2(dbh, line_id, startDate, window):
     startTime = time.mktime(startDate.timetuple()) - window
-    retrievalTime = time.mktime(startDate.timetuple())
+    retrievalTime = time.mktime(startDate.timetuple()) + window
     sleepTime = retrievalTime - time.time()
     while sleepTime > 0:
         print "Sleeping %s seconds" % sleepTime
@@ -324,7 +324,7 @@ def get_rider_list2(dbh, line_id, startDate, window):
     else:
         query = '''select rider_id from pos
             where time_ms between ? and ? and line_id=? order by time_ms asc'''
-    c.execute(query, (startTime * 1000, (retrievalTime + window) * 1000, line_id))
+    c.execute(query, (startTime * 1000, retrievalTime * 1000, line_id))
     riders = {d[0]: None for d in c.fetchall()}
     return riders.keys()
 
