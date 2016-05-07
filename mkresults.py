@@ -303,16 +303,29 @@ def get_line(name):
 
 def rider_info(c, r):
     if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
-        query = 'select fname, lname, cat, weight, height, age, male, zpower from rider_names where rider_id = %s limit 1'
+        query = 'select fname, lname, cat, weight, height, age, male, zpower from rider_names where rider_id = %s order by retrievaldate desc limit 1'
     else:
         query = 'select fname, lname, cat, weight, height, age, male, zpower from rider where rider_id = ? limit 1'
     c.execute(query, (r.id,))
     r.set_info(c.fetchone())
 
+def bulk_rider_info(F):
+    if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
+        query = 'select rider_id, fname, lname, cat, weight, height, age, male, zpower from rider_names where rider_id in (%s) order by retrievaldate desc'
+    else:
+        raise RuntimeError("Sqlite not implemented")
+    riders = {r.id: r for r in F}
+    c = dbh.cursor()
+    format_strings = ','.join(['%s'] * len(riders.keys()))
+    c.execute(query % format_strings, tuple(riders.keys()))
+    for row in c.fetchall():
+        if row[0] in riders:
+            riders[row[0]].set_info(row[1:])
+            del riders[row[0]]
 
 #
 # XXX - sample for organized team-only rides.
-#
+# XXX - deprecated
 def get_odz(R):
     ODZ = []
     c = dbh.cursor()
@@ -1488,10 +1501,13 @@ def main(argv):
         print 'Filtered to %d riders' % len(F)
 
     # pull names from the database.
-    cursor = name_dbh.cursor()
-    [ rider_info(cursor, r) for r in F ]
-    cursor.close()
-    cursor = None
+    if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
+        bulk_rider_info(F)
+    else:
+        cursor = name_dbh.cursor()
+        [ rider_info(cursor, r) for r in F ]
+        cursor.close()
+        cursor = None
 
     #
     # dump list of riders needing their names fetched.
