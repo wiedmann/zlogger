@@ -24,6 +24,7 @@ class rider():
 
         self.points     = 0
         self.end        = None
+        self.strava_id = None
 
     # allow accessing self via r[key]
     def __getitem__(self, k):
@@ -47,6 +48,8 @@ class rider():
         self.power      = [ '?', '*', ' ', ' ' ][self._power]
         self.name       = (self.fname + ' ' + self.lname).encode('utf-8')
         self.has_info   = True
+        if len(v) > 8:
+            self.strava_id = v[8]
 
         cat = None
         #
@@ -128,7 +131,9 @@ class rider():
             'cat': self.cat, 'height': self.height_cm,
             'weight': self.weight_kg,
             'power': self.power_type,
-            'male': True if self.male else False }
+            'male': True if self.male else False,
+            'strava_id': self.strava_id
+        }
 
 
     #
@@ -311,7 +316,12 @@ def rider_info(c, r):
 
 def bulk_rider_info(F):
     if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
-        query = 'select rider_id, fname, lname, cat, weight, height, age, male, zpower from rider_names where rider_id in (%s) order by retrievaldate desc'
+        query = '''
+select rider_id, fname, lname, cat, weight, height, age, male, zpower, strava_id
+from rider_names
+left join athlete_names on rider_id = zwift_id
+where rider_id in (%s) order by retrievaldate desc
+'''
     else:
         raise RuntimeError("Sqlite not implemented")
     riders = {r.id: r for r in F}
@@ -1392,9 +1402,10 @@ def zwiftpower(T, F, sprints):
         for r in place(L):
 	    if start_time == 0:
 		start_time = r.pos[0].time_ms
-	    print '%s %s, 0, %s, %s, %s, %s, %s, %s, %s, %s' %(
+	    print '%s %s, %s, %s, %s, %s, %s, %s, %s, %s, %s' %(
 		r.fname.encode('ascii', 'ignore'),
 		r.lname.encode('ascii', 'ignore'),
+        r.strava_id if r.strava_id else 0,
 		r.id,
 		cat,
 		(r.end.time_ms - start_time)/1000,
@@ -1571,16 +1582,20 @@ def main(argv):
         sys.stdout = open(fname, 'w')
 
     if (args.output):
-        f = open(args.output, "r")
         try:
-            out = json.load(f)
-        except ValueError, se:
-            sys.exit('"%s": %s' % (args.output, se))
-        f.close
-        if 'output' not in out or \
-                out['output'] not in globals():
-            sys.exit('Unknown output function.')
-        f = globals()[out['output']]
+            f = open(args.output, "r")
+            try:
+                out = json.load(f)
+            except ValueError, se:
+                sys.exit('"%s": %s' % (args.output, se))
+            f.close
+            output = out['output']
+        except IOError:
+            out = {}
+            output = args.output
+        if output not in globals():
+            sys.exit('Unknown output function %s.' % output)
+        f = globals()[output]
         f(out, F, sprints)
         print "Completed output for %s" % (args.output)
         return

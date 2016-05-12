@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 import sys, argparse, getpass
+import traceback
+
 import requests
 import json
 import sqlite3
@@ -224,14 +226,14 @@ def valueIfExists(dict, key, defValue):
     else:
         return defValue
 
-def updateStravaId(session, access_token, strava_access_token, zwift_rider_id, required_tag):
-    dbh.row_factory = sqlite3.Row
-    c = dbh.cursor()
-    try:
-        c.execute("select athlete_id from strava_lookup where rider_id=?", (zwift_rider_id,))
-        r = c.fetchone()
-
-        if r == None or r["athlete_id"] == None:
+def updateStravaId(racedbh, session, access_token, strava_access_token, rider_ids, required_tag):
+    c = racedbh.cursor()
+    query = "SELECT zwift_id, strava_id FROM athlete_names WHERE zwift_id in (%s)"
+    format_strings = ','.join(['%s'] * len(rider_ids))
+    c.execute(query % format_strings, tuple(rider_ids))
+    strava_ids = {r[0]: r[1] for r in c.fetchall()}
+    for zwift_rider_id in rider_ids:
+        if zwift_rider_id not in strava_ids or not strava_ids[zwift_rider_id]:
             json_dict = query_profile_activities(session, access_token, zwift_rider_id, 1)
             if args.verbose:
                 print ("\n")
@@ -239,14 +241,14 @@ def updateStravaId(session, access_token, strava_access_token, zwift_rider_id, r
 
             if json_dict == None or len(json_dict) < 1:
                 print "Error fetching rider's last zwift activity. Rider ID: %s" % zwift_rider_id
-                return
+                continue
 
             if required_tag:
                 fname = json_dict[0]["profile"]["firstName"]
                 lname = json_dict[0]["profile"]["lastName"]
                 if not (required_tag in lname.upper()):
                     print "Skipping non %s rider: %s %s" % (required_tag, fname.encode('ascii','ignore') , lname.encode('ascii','ignore'))
-                    return
+                    continue
 
             lastStravaActivityId = json_dict[0]["stravaActivityId"]
             athlete_json = query_strava_athlete_id_from_activity(session, strava_access_token, lastStravaActivityId)
@@ -254,42 +256,25 @@ def updateStravaId(session, access_token, strava_access_token, zwift_rider_id, r
             # what to do if rider not connected to strava?
             if athlete_json == None:
                 print "Error fetching rider's last strava activity. Rider ID: %s" % zwift_rider_id
-                return
+                continue
 
-            fname = valueIfExists(athlete_json, "firstname", None)
-            lname = valueIfExists(athlete_json, "lastname", None)
-            city = valueIfExists(athlete_json, "city", None)
-            state = valueIfExists(athlete_json, "state", None)
-            country = valueIfExists(athlete_json, "country", None)
-            sex = valueIfExists(athlete_json, "sex", None)
-            premium = valueIfExists(athlete_json, "premium", None)
+            fname = valueIfExists(athlete_json, "firstname", '')
+            lname = valueIfExists(athlete_json, "lastname", '')
+            city = valueIfExists(athlete_json, "city", '')
+            state = valueIfExists(athlete_json, "state", '')
+            country = valueIfExists(athlete_json, "country", '')
+            sex = valueIfExists(athlete_json, "sex", '')
+            premium = valueIfExists(athlete_json, "premium", '')
 
             print "zwift_rider_id: %s, strava_athlete_id: %s, fname: %s, lname: %s" %  \
                 (zwift_rider_id, athlete_json["id"], fname.encode('ascii','ignore'), lname.encode('ascii','ignore'))
 
-            c = dbh.cursor()
-            try:
-                c.execute("insert into strava_lookup " +
-                    "(rider_id, athlete_id, fname, lname, city, state, country, sex, premium," +
-                    " fetched_at) " +
-                    "values (?,?,?,?,?,?,?,?,?,date('now'))",
-                     (zwift_rider_id, athlete_json["id"], fname, lname,
-                     city, state, country,
-                     sex, premium))
-            except sqlite3.IntegrityError:
-                c.execute("update strava_lookup " +
-                    "set athlete_id = ?, fname = ?, lname = ?, city = ?, state = ?, country = ?," +
-                    " sex = ?, premium = ?, fetched_at = date('now')" +
-                    " where rider_id = ?",
-                     (athlete_json["id"], fname, lname,
-                     city, state, country,
-                     sex, premium,
-                     zwift_rider_id))
+            c = racedbh.cursor()
+            c.execute("replace into athlete_names (strava_id, zwift_id) VALUES (%s, %s)",
+                      (athlete_json["id"], zwift_rider_id))
         else:
             print "athlete_id (%s) already populated in db - skipping..." % zwift_rider_id
 
-    except sqlite3.Error as e:
-        print('An error occured: %s' % e)
 
 def get_rider_list(dbh):
     mkresults.dbh = dbh
@@ -375,6 +360,7 @@ def main(argv):
     parser.add_argument('-T', '--time', help="time to get riders")
     parser.add_argument('-W', '--window', help="time window (in seconds before and after time)", type=int,
                         default=600)
+    parser.add_argument('--no_profile', help="Don't update profile (usually used with -q)", action="store_true")
     args = parser.parse_args()
 
     if args.user:
@@ -422,11 +408,12 @@ def main(argv):
 
     access_token, refresh_token = login(session, args.user, password)
 
-    dbh = sqlite3.connect('rider_names.sql3')
-    for id in L:
-        updateRider(racedbh if using_mysql else None, session, access_token, id)
-    dbh.commit()
-    dbh.close()
+    if not args.no_profile:
+        dbh = sqlite3.connect('rider_names.sql3')
+        for id in L:
+            updateRider(racedbh if using_mysql else None, session, access_token, id)
+        dbh.commit()
+        dbh.close()
 
     if args.query_strava_athlete_id:
         # query rider's strava athlete id and other details if optionally
@@ -436,8 +423,7 @@ def main(argv):
             required_tag = mkresults.config(args.config).required_tag
 
         dbh = sqlite3.connect('results_history.sql3')
-        for id in L:
-            updateStravaId(session, access_token, strava_access_token, id, required_tag)
+        updateStravaId(racedbh, session, access_token, strava_access_token, L, required_tag)
         dbh.commit()
         dbh.close()
 
