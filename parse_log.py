@@ -50,6 +50,10 @@ def read_chalklines(dbh, line_mapper):
     for d in c.fetchall():
         line_mapper.add_dest_line(d[0], d[1])
 
+def mark_chalkline_active(dbh, id):
+    c = dbh.cursor()
+    c.execute("update chalkline set active=1, lastmonitored=now() where line = %s", (id, ))
+
 def main(argv):
     parser = argparse.ArgumentParser(description = 'Race Result Generator')
     parser.add_argument('zlogger_file', help='zlogger log file.')
@@ -58,6 +62,7 @@ def main(argv):
     parser.add_argument('-U', '--mysql_user', help='mysql user')
     parser.add_argument('-P', '--mysql_password', help='mysql password')
     parser.add_argument('-d', '--debug', action='store_true', help='Debug things')
+    parser.add_argument('-i', '--update_interval', type=int, help='chalkline update interval', default=30)
     args = parser.parse_args()
     line_mapper = LineMapper()
 
@@ -66,6 +71,7 @@ def main(argv):
         dbh = opendb(args)
         read_chalklines(dbh, line_mapper)
         mycursor = dbh.cursor()
+        last_line_update={}
         for line in loglines:
             line = line.strip()
             try:
@@ -88,10 +94,17 @@ def main(argv):
                                 mycursor.execute("SELECT line from chalkline where name = %s", (line_name, ))
                                 line_id = mycursor.fetchall()[0][0]
                                 line_mapper.add_dest_line(line_id, line_name)
+                        elif data['e'] == 'NEARBY':
+                            line_id = line_mapper.get_mapping(data['v']['data'])
+                            mark_chalkline_active(dbh, line_id)
+                            last_line_update[line_id] = time.time()
                         elif data['e'] == 'POS':
                             try:
                                 value = data['v']
                                 line_id = line_mapper.get_mapping(value['line'])
+                                if line_id not in last_line_update or (time.time() - last_line_update[line_id]) > args.update_interval:
+                                    mark_chalkline_active(dbh, line_id)
+                                    last_line_update[line_id] = time.time()
                                 params = (data['msec'], value['id'], line_id, value['fwd'], value['m'],
                                           value['mwh'], value['dur'], value['ele'], value['spd'], value['hr'],
                                           value['obs'])
