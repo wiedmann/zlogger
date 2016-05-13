@@ -314,20 +314,22 @@ def rider_info(c, r):
     c.execute(query, (r.id,))
     r.set_info(c.fetchone())
 
-def bulk_rider_info(F):
+def bulk_rider_info(F, startTime, endTime):
     if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
         query = '''
 select rider_id, fname, lname, cat, weight, height, age, male, zpower, strava_id
 from rider_names
 left join athlete_names on rider_id = zwift_id
-where rider_id in (%s) order by retrievaldate desc
+where rider_id in (%s)
+and retrievaldate between from_unixtime(%%s) and from_unixtime(%%s)
+order by retrievaldate desc
 '''
     else:
         raise RuntimeError("Sqlite not implemented")
     riders = {r.id: r for r in F}
     c = dbh.cursor()
     format_strings = ','.join(['%s'] * len(riders.keys()))
-    c.execute(query % format_strings, tuple(riders.keys()))
+    c.execute(query % format_strings, tuple(riders.keys()) + (startTime, endTime))
     for row in c.fetchall():
         if row[0] in riders:
             riders[row[0]].set_info(row[1:])
@@ -1450,6 +1452,8 @@ def main(argv):
     parser.add_argument('-I', '--race_id', help='race id')
     parser.add_argument('-T', '--start_time', help='race start time')
     parser.add_argument('-N', '--race_name', help='race name')
+    parser.add_argument('-W', '--profile_window', help='Window (in seconds from start) for profile retrieval',
+                        default=7200, type=int)
     parser.add_argument('config_file', help='Configuration file for race.')
     args = parser.parse_args()
 
@@ -1513,7 +1517,9 @@ def main(argv):
 
     # pull names from the database.
     if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
-        bulk_rider_info(F)
+        start_time = int(conf.start_ms/1000) - args.profile_window
+        end_time = int(conf.start_ms/1000) + args.profile_window
+        bulk_rider_info(F, start_time, end_time)
     else:
         cursor = name_dbh.cursor()
         [ rider_info(cursor, r) for r in F ]
