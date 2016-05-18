@@ -5,6 +5,7 @@ import argparse
 import sqlite3
 import traceback
 import pika
+import pika.exceptions
 
 import mysql.connector
 from mysql.connector import errors as mysql_errors
@@ -51,9 +52,21 @@ def read_chalklines(dbh, line_mapper):
     for d in c.fetchall():
         line_mapper.add_dest_line(d[0], d[1])
 
+active_chalklines = {}
+
 def mark_chalkline_active(dbh, id):
+    global active_chalklines
     c = dbh.cursor()
     c.execute("update chalkline set active=1, lastmonitored=now() where line = %s", (id, ))
+    active_chalklines[id] = True
+
+def mark_all_chalklines_inactive(dbh):
+    global active_chalklines
+    c = dbh.cursor()
+    for id in active_chalklines.keys():
+        c.execute("update chalkline set active=0 where line = %s", (id, ))
+    active_chalklines = {}
+
 
 def main(argv):
     parser = argparse.ArgumentParser(description = 'Race Result Generator')
@@ -66,13 +79,12 @@ def main(argv):
     parser.add_argument('-i', '--update_interval', type=int, help='chalkline update interval', default=30)
     #parser.add_argument('--pika_url', default='amqp://guest:guest@localhost:5672/%2F')
     parser.add_argument('--pika_url')
+    parser.add_argument('--stay_running_after_shutdown', action='store_true')
     args = parser.parse_args()
     line_mapper = LineMapper()
 
     if args.pika_url:
-        parameters = pika.URLParameters(args.pika_url)
-        connection = pika.BlockingConnection(parameters)
-        channel = connection.channel()
+        channel, connection = open_amqp(args)
     else:
         channel = None
 
@@ -88,7 +100,7 @@ def main(argv):
                 try:
                     data = json.loads(line)
                     while True:
-                        if not dbh and not args.no_db:
+                        if not dbh:
                             dbh = opendb(args)
                             mycursor = dbh.cursor()
                         try:
@@ -109,6 +121,10 @@ def main(argv):
                                 line_id = line_mapper.get_mapping(data['v']['data'])
                                 mark_chalkline_active(dbh, line_id)
                                 last_line_update[line_id] = time.time()
+                            elif data['e'] == 'SHUTDOWN':
+                                mark_all_chalklines_inactive(dbh)
+                                if not args.stay_running_after_shutdown:
+                                    return
                             elif data['e'] == 'POS':
                                 try:
                                     value = data['v']
@@ -119,14 +135,19 @@ def main(argv):
                                     params = (data['msec'], value['id'], line_id, value['fwd'], value['m'],
                                               value['mwh'], value['dur'], value['ele'], value['spd'], value['hr'],
                                               value['obs'])
-                                    try:
-                                        if channel:
-                                            data = dict(zip(('msec', 'riderid', 'lineid', 'fwd', 'meters', 'mwh', 'duration',
-                                                         'elevation', 'speed', 'hr', 'monitorid'), params))
-                                            channel.basic_publish('zlogger', 'POS.%s.%s' % (line_id, value['id']),
-                                                                  json.dumps(data))
-                                    except:
-                                        print "WARNING: exception publishing POS event: %s" % traceback.format_exc()
+                                    if channel:
+                                        for i in xrange(0,3):
+                                            try:
+                                                data = dict(zip(('msec', 'riderid', 'lineid', 'fwd', 'meters', 'mwh', 'duration',
+                                                             'elevation', 'speed', 'hr', 'monitorid'), params))
+                                                channel.publish('zlogger', 'POS.%s.%s' % (line_id, value['id']),
+                                                                      json.dumps(data))
+                                                break
+                                            except pika.exceptions.ConnectionClosed:
+                                                channel, connection = open_amqp(args)
+                                            except:
+                                                channel, connection = open_amqp(args)
+                                                print "WARNING: exception publishing POS event: %s" % traceback.format_exc()
                                     if args.debug:
                                         print "Msec=%s,ID=%s,Line=%s,fwd=%s,meters=%s,mwh=%s,duration=%s,Elevation=%s,Speed=%s,HR=%s,monitor=%s" % params
                                     SQL = '''REPLACE INTO live_results (msec, riderid, lineid, fwd, meters, mwh, duration,
@@ -154,6 +175,14 @@ def main(argv):
                     print "WARNING - bad log file line: '%s'" % line
         except KeyboardInterrupt:
             connection.close()
+
+
+def open_amqp(args):
+    parameters = pika.URLParameters(args.pika_url)
+    connection = pika.BlockingConnection(parameters)
+    channel = connection.channel()
+    return channel, connection
+
 
 if __name__ == '__main__':
     try:
