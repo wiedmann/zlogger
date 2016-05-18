@@ -30,7 +30,6 @@ def main(argv):
     parameters = pika.URLParameters(args.pika_url)
     connection = pika.BlockingConnection(parameters)
     channel = connection.channel()
-    channel.exchange_declare(exchange='zlogger', type='topic')
     result = channel.queue_declare(exclusive=True)
     queue_name = result.method.queue
     for t in args.topics:
