@@ -84,7 +84,7 @@ class rider():
         # NAME RACE-X) INFO
         #   match single letter following dash in name.
         if cat is None:
-            m = re.match('.*[-](.)[ )].*', self.lname)
+            m = re.match('.*[-]\s?(.)[ )].*', self.lname)
             cat = m.group(1).upper() if m else None
 
         # NAME (X) INFO
