@@ -25,6 +25,7 @@ def main(argv):
     parser.add_argument('-P', '--mysql_password', help='mysql password')
     parser.add_argument('-d', '--debug', action='store_true', help='Debug things')
     parser.add_argument('--pika_url', default='amqp://guest:guest@localhost:5672/%2F')
+    parser.add_argument('-E', '--exchange', default='zlogger')
     args = parser.parse_args()
 
     parameters = pika.URLParameters(args.pika_url)
@@ -33,7 +34,7 @@ def main(argv):
     result = channel.queue_declare(exclusive=True)
     queue_name = result.method.queue
     for t in args.topics:
-        channel.queue_bind(exchange='zlogger', queue=queue_name, routing_key=t)
+        channel.queue_bind(exchange=args.exchange, queue=queue_name, routing_key=t)
 
     try:
         channel.basic_consume(callback, queue=queue_name, no_ack=True)
