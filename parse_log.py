@@ -1,9 +1,12 @@
+import os
 import time
 import sys
 import json
 import argparse
 import sqlite3
 import traceback
+
+import datetime
 import pika
 import pika.exceptions
 
@@ -67,6 +70,8 @@ def mark_all_chalklines_inactive(dbh):
         c.execute("update chalkline set active=0 where line = %s", (id, ))
     active_chalklines = {}
 
+class ShutdownError(Exception):
+    pass
 
 def main(argv):
     parser = argparse.ArgumentParser(description = 'Race Result Generator')
@@ -77,6 +82,7 @@ def main(argv):
     parser.add_argument('-P', '--mysql_password', help='mysql password')
     parser.add_argument('-d', '--debug', action='store_true', help='Debug things')
     parser.add_argument('-i', '--update_interval', type=int, help='chalkline update interval', default=30)
+    parser.add_argument('-r', '--rename_log', action='store_true', help='Rename input log file on shutdown')
     #parser.add_argument('--pika_url', default='amqp://guest:guest@localhost:5672/%2F')
     parser.add_argument('--pika_url')
     parser.add_argument('--stay_running_after_shutdown', action='store_true')
@@ -94,6 +100,7 @@ def main(argv):
         read_chalklines(dbh, line_mapper)
         mycursor = dbh.cursor()
         last_line_update={}
+        shutdown=False
         try:
             for line in loglines:
                 line = line.strip()
@@ -124,7 +131,7 @@ def main(argv):
                             elif data['e'] == 'SHUTDOWN':
                                 mark_all_chalklines_inactive(dbh)
                                 if not args.stay_running_after_shutdown:
-                                    return
+                                    raise ShutdownError()
                             elif data['e'] == 'POS':
                                 try:
                                     value = data['v']
@@ -173,8 +180,18 @@ def main(argv):
                                     pass
                 except ValueError:
                     print "WARNING - bad log file line: '%s'" % line
-        except KeyboardInterrupt:
+        except ShutdownError:
+            shutdown=True
+        finally:
             connection.close()
+    if shutdown and args.rename_log:
+        time.sleep(1)  # avoid race condition with zlogger closing file
+        newfile = args.zlogger_file + '.' + datetime.datetime.now().strftime('%Y%m%d')
+        suffix = 1
+        basename = newfile
+        while os.path.isfile(newfile):
+            newfile = basename + '.' + str(suffix)
+        os.rename(args.zlogger_file, newfile)
 
 
 def open_amqp(args):
