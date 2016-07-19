@@ -272,7 +272,7 @@ def get_riders(begin_ms, end_ms):
     if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
         query = '''select riderid, msec, lineid, fwd,
             meters, mwh, duration, elevation, speed, hr from live_results
-            where msec between %s and %s order by msec asc'''
+            where msec between %s and %s and backupwatcher is null order by msec asc'''
     else:
         query = '''select rider_id, time_ms, line_id, forward,
             meters, mwh, duration, elevation, speed, hr from pos

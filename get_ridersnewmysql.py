@@ -11,6 +11,7 @@ import mysql.connector
 import datetime
 import dateutil.parser
 from collections import namedtuple
+from mysql.connector import errors as mysql_errors
 
 global args
 global dbh
@@ -175,7 +176,7 @@ def login(session, user, password):
     access_token, refresh_token, expired_in = post_credentials(session, user, password)
     return access_token, refresh_token
 
-def updateRider(mysqldbh, session, access_token, user):
+def updateRider(mysqldbh, dbh, session, access_token, user, event_id = None, race_id = None):
     # Query Player Profile
     json_dict = query_player_profile(session, access_token, user)
     if args.verbose:
@@ -191,25 +192,34 @@ def updateRider(mysqldbh, session, access_token, user):
         power = 3
     fname = json_dict["firstName"].strip()
     lname = json_dict["lastName"].strip()
-    print ("id=%s wt=%s m=%s [%s] <%s %s>\n" %
-        (json_dict["id"], json_dict["weight"], json_dict["male"],
-         json_dict["powerSourceModel"], fname.encode('ascii', 'ignore'), lname.encode('ascii', 'ignore')))
-    c = dbh.cursor()
+    if race_id and not race_id.lower() in lname.lower():
+        lname = lname + ' ' + race_id
+    try:
+        print ("id=%s wt=%s m=%s [%s] <%s %s>\n" %
+            (json_dict["id"], json_dict["weight"], json_dict["male"],
+             json_dict["powerSourceModel"], fname.encode('ascii', 'ignore'), lname.encode('ascii', 'ignore')))
+    except:
+        pass
+    c = dbh.cursor() if dbh else None
+
     if mysqldbh:
         mycursor=mysqldbh.cursor()
     else:
         mycursor = None
     try:
         if mycursor:
-            SQL = "REPLACE INTO rider_names (rider_id, fname, lname, age, weight, height, male, zpower, country_code) VALUES (%s,%s,TRIM(%s),%s,%s,%s,%s,%s,%s);"
-            mycursor.execute(SQL, (json_dict["id"],fname,lname.encode('ascii','ignore'),json_dict["age"],
-                             json_dict["weight"],json_dict["height"],male,power,json_dict["countryCode"]))
-        c.execute("insert into rider " +
-            "(rider_id, fname, lname, age, weight, height, male, zpower," +
-            " fetched_at) " +
-            "values (?,?,?,?,?,?,?,?,date('now'))",
-             (json_dict["id"], fname, lname, json_dict["age"],
-             json_dict["weight"], json_dict["height"], male, power))
+            SQL = '''REPLACE INTO rider_names (rider_id, fname, lname, age, weight, height, male, zpower, country_code, event)
+                      VALUES (%s,%s,TRIM(%s),%s,%s,%s,%s,%s,%s, %s);'''
+            mycursor.execute(SQL, (json_dict["id"], fname, lname.encode('ascii', 'ignore'), json_dict["age"],
+                                   json_dict["weight"], json_dict["height"], male, power, json_dict["countryCode"],
+                                   event_id))
+        if c:
+            c.execute("insert into rider " +
+                "(rider_id, fname, lname, age, weight, height, male, zpower," +
+                " fetched_at) " +
+                "values (?,?,?,?,?,?,?,?,date('now'))",
+                 (json_dict["id"], fname, lname, json_dict["age"],
+                 json_dict["weight"], json_dict["height"], male, power))
 
     except sqlite3.IntegrityError:
         c.execute("update rider " +
@@ -295,11 +305,14 @@ def get_rider_list(dbh):
     return [ r.id for r in R.values() if mkresults.filter_start(r) ]
 
 def get_rider_list2(dbh, line_id, startDate, window):
-    startTime = time.mktime(startDate.timetuple()) - window
-    retrievalTime = time.mktime(startDate.timetuple()) + window
+    if type(startDate) == int:
+        startTime = startDate - window
+    else:
+        startTime = time.mktime(startDate.timetuple()) - window
+    retrievalTime = startTime + (2 * window)
     sleepTime = retrievalTime - time.time()
     while sleepTime > 0:
-        print "Sleeping %s seconds" % sleepTime
+        print "Sleeping %s seconds (%s - %s)" % (sleepTime, retrievalTime, time.time())
         time.sleep(sleepTime)
         sleepTime = retrievalTime - time.time()
     c = dbh.cursor()
@@ -332,6 +345,62 @@ def get_line(dbh, name):
         sys.exit("More than one line matches '%s'" % name)
     return int(data[0][0])
 
+def get_line_info(dbh, id):
+    c = dbh.cursor()
+    c.execute('''select name, race_corral_exit from chalkline where line = %s ''', (id,))
+    data = c.fetchall()
+    if data:
+        return data[0][0], data[0][1]
+    return None, None
+
+def process_line(dbh, line_id, start_time, start_window, user, password, event_id = None, race_id=None):
+    L = get_rider_list2(dbh, line_id, start_time, start_window)
+    session = requests.session()
+    line_name, race_corral_exit = get_line_info(dbh, line_id)
+    access_token, refresh_token = login(session, user, password)
+    for id in L:
+        updateRider(dbh, None, session, access_token, id, event_id if race_corral_exit else None,
+                    race_id if race_corral_exit else None)
+    logout(session, refresh_token)
+
+def run_server(dbh, args, user, password):
+    if args.time:
+        startDate = dateutil.parser.parse(args.time)
+        last_retrieval = time.mktime(startDate.timetuple())
+    else:
+        last_retrieval = time.time()
+
+    while True:
+        try:
+            now = time.time()
+            cursor = dbh.cursor()
+            cursor.execute('''select event_date, start_line_id, start_window, event_date + start_window as wake_time,
+                              title, event_id, race_id
+                              from event_detail where (event_date + start_window) > %s order by wake_time ASC limit 1''',
+                           (last_retrieval,))
+            sleep_time = 60
+            for row in cursor.fetchall():
+                (event_date, start_line_id, start_window, wake_time, title, event_id, race_id) = row
+                if wake_time <= now:
+                    print "Getting riders for %s" % title
+                    process_line(dbh, start_line_id, event_date, start_window, user, password, event_id,
+                                 race_id if args.append_race_id else None)
+                    last_retrieval = wake_time
+                    sleep_time = 0
+                else:
+                    sleep_time = min(wake_time - now, 60)
+                    #print("Next wake time in %s seconds for %s, sleeping %s seconds" % (wake_time - now, title, sleep_time))
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+        except mysql_errors.Error:
+            print "Mysql exception %s" % traceback.format_exc()
+            try:
+                dbh.close()
+            except:
+                pass
+            dbh = open_mysql(args)
+
+
 def main(argv):
     global args
     global dbh
@@ -361,6 +430,11 @@ def main(argv):
     parser.add_argument('-W', '--window', help="time window (in seconds before and after time)", type=int,
                         default=600)
     parser.add_argument('--no_profile', help="Don't update profile (usually used with -q)", action="store_true")
+    parser.add_argument('--server', help="Run in server mode, monitoring event_detail table", action="store_true")
+    parser.add_argument('--append_race_id', help="In server mode, append race id to user's name if not present",
+                        action="store_true")
+    parser.add_argument('--race_id')
+    parser.add_argument('--event_id')
     args = parser.parse_args()
 
     if args.user:
@@ -384,12 +458,14 @@ def main(argv):
     logout(session, refresh_token)
 
     if args.mysql_database:
-        racedbh = mysql.connector.connect(user=args.mysql_user, password=args.mysql_password, database=args.mysql_database,
-                                      host=args.mysql_host, autocommit=True)
+        racedbh = open_mysql(args)
         using_mysql = True
     else:
         racedbh = sqlite3.connect(args.database)
         using_mysql = False
+    if args.server:
+        run_server(racedbh, args, args.user, password)
+        exit()
     if args.config:
         L = get_rider_list(racedbh)
     elif args.idlist:
@@ -411,7 +487,7 @@ def main(argv):
     if not args.no_profile:
         dbh = sqlite3.connect('rider_names.sql3')
         for id in L:
-            updateRider(racedbh if using_mysql else None, session, access_token, id)
+            updateRider(racedbh if using_mysql else None, dbh, session, access_token, id, args.event_id, args.race_id)
         dbh.commit()
         dbh.close()
 
@@ -428,6 +504,12 @@ def main(argv):
         dbh.close()
 
     logout(session, refresh_token)
+
+
+def open_mysql(args):
+    return mysql.connector.connect(user=args.mysql_user, password=args.mysql_password, database=args.mysql_database,
+                                   host=args.mysql_host, autocommit=True)
+
 
 if __name__ == '__main__':
     try:

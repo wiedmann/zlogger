@@ -131,6 +131,7 @@ def main(argv):
                             elif data['e'] == 'SHUTDOWN':
                                 mark_all_chalklines_inactive(dbh)
                                 if not args.stay_running_after_shutdown:
+                                    print "Got shutdown event - shutting down."
                                     raise ShutdownError()
                             elif data['e'] == 'POS':
                                 try:
@@ -145,21 +146,30 @@ def main(argv):
                                     if channel:
                                         for i in xrange(0,3):
                                             try:
-                                                data = dict(zip(('msec', 'riderid', 'lineid', 'fwd', 'meters', 'mwh', 'duration',
+                                                msg_data = dict(zip(('msec', 'riderid', 'lineid', 'fwd', 'meters', 'mwh', 'duration',
                                                              'elevation', 'speed', 'hr', 'monitorid'), params))
                                                 channel.publish('zlogger', 'POS.%s.%s' % (line_id, value['id']),
-                                                                      json.dumps(data))
+                                                                      json.dumps(msg_data))
                                                 break
                                             except pika.exceptions.ConnectionClosed:
-                                                channel, connection = open_amqp(args)
+                                                try:
+                                                    channel, connection = open_amqp(args)
+                                                except:
+                                                    print "WARNING: exception trying to reconnect to amqp: %s" % traceback.format_exc()
+                                                    i = 3
                                             except:
-                                                channel, connection = open_amqp(args)
                                                 print "WARNING: exception publishing POS event: %s" % traceback.format_exc()
+                                                try:
+                                                    channel, connection = open_amqp(args)
+                                                except:
+                                                    print "WARNING: exception trying to reconnect to amqp: %s" % traceback.format_exc()
+                                                    i = 3
                                     if args.debug:
                                         print "Msec=%s,ID=%s,Line=%s,fwd=%s,meters=%s,mwh=%s,duration=%s,Elevation=%s,Speed=%s,HR=%s,monitor=%s" % params
                                     SQL = '''REPLACE INTO live_results (msec, riderid, lineid, fwd, meters, mwh, duration,
-                                            elevation, speed, hr, monitorid)
-                                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);'''
+                                            elevation, speed, hr, monitorid, timestamp)
+                                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s);'''
+                                    params = params + (datetime.datetime.now(),)
                                     mycursor.execute(SQL, params)
                                 except KeyError:
                                     print "WARNING - POS Entry for unknown line: %s" % line
@@ -178,12 +188,20 @@ def main(argv):
                                     dbh = None
                                 except:
                                     pass
+                        except KeyError:
+                            print "ERROR - unrecognized data: %s" % line
+                            break
                 except ValueError:
                     print "WARNING - bad log file line: '%s'" % line
         except ShutdownError:
             shutdown=True
+        except:
+            print "Exception - exiting %s" % traceback.format_exc()
         finally:
-            connection.close()
+            try:
+                connection.close()
+            except:
+                pass
     if shutdown and args.rename_log:
         time.sleep(1)  # avoid race condition with zlogger closing file
         newfile = args.zlogger_file + '.' + datetime.datetime.now().strftime('%Y%m%d')
