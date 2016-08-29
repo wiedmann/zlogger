@@ -208,11 +208,11 @@ def updateRider(mysqldbh, dbh, session, access_token, user, event_id = None, rac
         mycursor = None
     try:
         if mycursor:
-            SQL = '''REPLACE INTO rider_names (rider_id, fname, lname, age, weight, height, male, zpower, country_code, event)
-                      VALUES (%s,%s,TRIM(%s),%s,%s,%s,%s,%s,%s, %s);'''
+            SQL = '''REPLACE INTO rider_names (rider_id, fname, lname, age, weight, height, male, zpower, country_code, event, virtualBikeModel)
+                      VALUES (%s,%s,TRIM(%s),%s,%s,%s,%s,%s,%s, %s, %s);'''
             mycursor.execute(SQL, (json_dict["id"], fname, lname.encode('ascii', 'ignore'), json_dict["age"],
                                    json_dict["weight"], json_dict["height"], male, power, json_dict["countryCode"],
-                                   event_id))
+                                   event_id, json_dict["virtualBikeModel"]))
         if c:
             c.execute("insert into rider " +
                 "(rider_id, fname, lname, age, weight, height, male, zpower," +
