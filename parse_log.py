@@ -133,22 +133,30 @@ def main(argv):
                                 if not args.stay_running_after_shutdown:
                                     print "Got shutdown event - shutting down."
                                     raise ShutdownError()
-                            elif data['e'] == 'POS':
+                            elif data['e'] == 'POS' or data['e'] == 'TELE':
                                 try:
                                     value = data['v']
-                                    line_id = line_mapper.get_mapping(value['line'])
-                                    if line_id not in last_line_update or (time.time() - last_line_update[line_id]) > args.update_interval:
-                                        mark_chalkline_active(dbh, line_id)
-                                        last_line_update[line_id] = time.time()
+                                    if data['e'] == 'POS':
+                                        line_id = line_mapper.get_mapping(value['line'])
+                                        if line_id not in last_line_update or (time.time() - last_line_update[line_id]) > args.update_interval:
+                                            mark_chalkline_active(dbh, line_id)
+                                            last_line_update[line_id] = time.time()
+                                        location_field = 'lineid'
+                                        table = 'live_results'
+                                    else:
+                                        location_field = 'rad'
+                                        line_id = None
+                                        table = 'telemetry'
                                     params = (data['msec'], value['id'], line_id, value['fwd'], value['m'],
                                               value['mwh'], value['dur'], value['ele'], value['spd'], value['hr'],
-                                              value['obs'])
+                                              value['obs'], value.get('lpup', 0), value.get('pup', ''),
+                                              value.get('cad', 0))
                                     if channel:
                                         for i in xrange(0,3):
                                             try:
-                                                msg_data = dict(zip(('msec', 'riderid', 'lineid', 'fwd', 'meters', 'mwh', 'duration',
-                                                             'elevation', 'speed', 'hr', 'monitorid'), params))
-                                                channel.publish('zlogger', 'POS.%s.%s' % (line_id, value['id']),
+                                                msg_data = dict(zip(('msec', 'riderid', location_field, 'fwd', 'meters', 'mwh', 'duration',
+                                                             'elevation', 'speed', 'hr', 'monitorid', 'lpup', 'pup', 'cad'), params))
+                                                channel.publish('zlogger', '%s.%s.%s' % (data['e'], line_id, value['id']),
                                                                       json.dumps(msg_data))
                                                 break
                                             except pika.exceptions.ConnectionClosed:
@@ -166,9 +174,9 @@ def main(argv):
                                                     i = 3
                                     if args.debug:
                                         print "Msec=%s,ID=%s,Line=%s,fwd=%s,meters=%s,mwh=%s,duration=%s,Elevation=%s,Speed=%s,HR=%s,monitor=%s" % params
-                                    SQL = '''REPLACE INTO live_results (msec, riderid, lineid, fwd, meters, mwh, duration,
-                                            elevation, speed, hr, monitorid, timestamp)
-                                            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s);'''
+                                    SQL = ('REPLACE INTO ' + table + ' (msec, riderid, ' + location_field + ', fwd, meters, mwh, duration, '
+                                            + 'elevation, speed, hr, monitorid, lpup, pup, cad, timestamp) '
+                                            + 'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s, %s);')
                                     params = params + (datetime.datetime.now(),)
                                     mycursor.execute(SQL, params)
                                 except KeyError:
