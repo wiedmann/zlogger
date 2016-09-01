@@ -210,7 +210,7 @@ def updateRider(mysqldbh, dbh, session, access_token, user, event_id = None, rac
         if mycursor:
             SQL = '''REPLACE INTO rider_names (rider_id, fname, lname, age, weight, height, male, zpower, country_code, event, virtualBikeModel)
                       VALUES (%s,%s,TRIM(%s),%s,%s,%s,%s,%s,%s, %s, %s);'''
-            mycursor.execute(SQL, (json_dict["id"], fname, lname.encode('ascii', 'ignore'), json_dict["age"],
+            mycursor.execute(SQL, (json_dict["id"], fname.encode('ascii', 'ignore'), lname.encode('ascii', 'ignore'), json_dict["age"],
                                    json_dict["weight"], json_dict["height"], male, power, json_dict["countryCode"],
                                    event_id, json_dict["virtualBikeModel"]))
         if c:
@@ -382,14 +382,14 @@ def run_server(dbh, args, user, password):
             for row in cursor.fetchall():
                 (event_date, start_line_id, start_window, wake_time, title, event_id, race_id) = row
                 if wake_time <= now:
-                    print "Getting riders for %s" % title
-                    process_line(dbh, start_line_id, event_date, start_window, user, password, event_id,
-                                 race_id if args.append_race_id else None)
                     last_retrieval = wake_time
                     sleep_time = 0
+                    print "Getting riders for %s" % title.encode('ascii', 'ignore')
+                    process_line(dbh, start_line_id, event_date, start_window, user, password, event_id,
+                                 race_id if args.append_race_id else None)
                 else:
                     sleep_time = min(wake_time - now, 60)
-                    #print("Next wake time in %s seconds for %s, sleeping %s seconds" % (wake_time - now, title, sleep_time))
+                    #print("Next wake time in %s seconds for %s, sleeping %s seconds" % (wake_time - now, title.encode('ascii', 'ignore', sleep_time))
             if sleep_time > 0:
                 time.sleep(sleep_time)
         except mysql_errors.Error:
