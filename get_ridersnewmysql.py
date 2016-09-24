@@ -54,7 +54,7 @@ def post_credentials(session, username, password):
         return (json_dict["access_token"], json_dict["refresh_token"], json_dict["expires_in"])
 
     except requests.exceptions.RequestException, e:
-        print('HTTP Request failed: %s' % e)
+        print('HTTP Request failed: %s' % traceback.format_exc())
 
 def query_player_profile(session, access_token, player_id):
     # Query Player Profile
@@ -141,11 +141,11 @@ def query_strava_athlete_id_from_activity(session, strava_access_token, activity
         return (json_dict["athlete"] if "athlete" in json_dict else None)
 
     except requests.exceptions.RequestException:
-        print('HTTP Request failed')
+        print('HTTP Request failed: %s' % traceback.format_exc())
 
 def logout(session, refresh_token):
     # Logout
-    # POST https://secure.zwift.com/auth/realms/zwift/tokens/logout
+    # POST https://secure.zwift.com/auth/realms/zwift/tokens/logouts
     try:
         response = session.post(
             url="https://secure.zwift.com/auth/realms/zwift/tokens/logout",
@@ -170,7 +170,7 @@ def logout(session, refresh_token):
             print('Response HTTP Response Body: {content}'.format(
                 content=response.content))
     except requests.exceptions.RequestException, e:
-        print('HTTP Request failed: %s' % e)
+        print('HTTP Request failed: %s' % traceback.format_exc())
 
 def login(session, user, password):
     access_token, refresh_token, expired_in = post_credentials(session, user, password)
@@ -208,11 +208,14 @@ def updateRider(mysqldbh, dbh, session, access_token, user, event_id = None, rac
         mycursor = None
     try:
         if mycursor:
-            SQL = '''REPLACE INTO rider_names (rider_id, fname, lname, age, weight, height, male, zpower, country_code, event, virtualBikeModel)
-                      VALUES (%s,%s,TRIM(%s),%s,%s,%s,%s,%s,%s, %s, %s);'''
+            SQL = '''REPLACE INTO rider_names (rider_id, fname, lname, age, weight, height, male, zpower, country_code, event, virtualBikeModel, achievementLevel, totalDistance, totalDistanceClimbed, totalTimeInMinutes, totalInKomJersey,totalInSprintersJersey, totalInOrangeJersey, totalWattHours, totalExperiencePoints)
+                      VALUES (%s,%s,TRIM(%s),%s,%s,%s,%s,%s,%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);'''
             mycursor.execute(SQL, (json_dict["id"], fname.encode('ascii', 'ignore'), lname.encode('ascii', 'ignore'), json_dict["age"],
                                    json_dict["weight"], json_dict["height"], male, power, json_dict["countryCode"],
-                                   event_id, json_dict["virtualBikeModel"]))
+                                   event_id, json_dict["virtualBikeModel"],json_dict["achievementLevel"],
+                                   json_dict["totalDistance"],json_dict["totalDistanceClimbed"],json_dict["totalTimeInMinutes"],
+                                   json_dict["totalInKomJersey"],json_dict["totalInSprintersJersey"],json_dict["totalInOrangeJersey"],
+                                   json_dict["totalWattHours"],json_dict["totalExperiencePoints"]))
         if c:
             c.execute("insert into rider " +
                 "(rider_id, fname, lname, age, weight, height, male, zpower," +
@@ -389,7 +392,7 @@ def run_server(dbh, args, user, password):
                                  race_id if args.append_race_id else None)
                 else:
                     sleep_time = min(wake_time - now, 60)
-                    #print("Next wake time in %s seconds for %s, sleeping %s seconds" % (wake_time - now, title.encode('ascii', 'ignore', sleep_time))
+                    print("Next wake time in %s seconds for %s, sleeping %s seconds" % (wake_time - now, title.encode('ascii', 'ignore'), sleep_time))
             if sleep_time > 0:
                 time.sleep(sleep_time)
         except mysql_errors.Error:
