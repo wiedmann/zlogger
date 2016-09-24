@@ -37,11 +37,16 @@ class LineMapper(object):
         return self._mapping[int(source_line_id)]
 
 def follow(file):
+    partial_line = ''
     while True:
         line = file.readline()
-        if not line:
+        if not line or '\n' not in line:
+            if line:
+                partial_line += line
             time.sleep(0.3)
             continue
+        line = partial_line + line
+        partial_line = ''
         yield line
 
 def opendb(args):
@@ -61,6 +66,7 @@ def mark_chalkline_active(dbh, id):
     global active_chalklines
     c = dbh.cursor()
     c.execute("update chalkline set active=1, lastmonitored=now() where line = %s", (id, ))
+    dbh.commit()
     active_chalklines[id] = True
 
 def mark_all_chalklines_inactive(dbh):
@@ -68,6 +74,7 @@ def mark_all_chalklines_inactive(dbh):
     c = dbh.cursor()
     for id in active_chalklines.keys():
         c.execute("update chalkline set active=0 where line = %s", (id, ))
+        dbh.commit()
     active_chalklines = {}
 
 class ShutdownError(Exception):
@@ -121,6 +128,7 @@ def main(argv):
                                     print "Adding new chalkline to db: %s, '%s', '%s'" % (line_id, line_data, line_name)
                                     mycursor.execute("INSERT into chalkline (data, name) VALUES (%s, %s)",
                                                      (line_data, line_name))
+                                    dbh.commit()
                                     mycursor.execute("SELECT line from chalkline where name = %s", (line_name, ))
                                     line_id = mycursor.fetchall()[0][0]
                                     line_mapper.add_dest_line(line_id, line_name)
@@ -150,12 +158,12 @@ def main(argv):
                                     params = (data['msec'], value['id'], line_id, value['fwd'], value['m'],
                                               value['mwh'], value['dur'], value['ele'], value['spd'], value['hr'],
                                               value['obs'], value.get('lpup', 0), value.get('pup', ''),
-                                              value.get('cad', 0))
+                                              value.get('cad', 0), value.get('grp', 0))
                                     if channel:
                                         for i in xrange(0,3):
                                             try:
                                                 msg_data = dict(zip(('msec', 'riderid', location_field, 'fwd', 'meters', 'mwh', 'duration',
-                                                             'elevation', 'speed', 'hr', 'monitorid', 'lpup', 'pup', 'cad'), params))
+                                                             'elevation', 'speed', 'hr', 'monitorid', 'lpup', 'pup', 'cad', 'grp'), params))
                                                 channel.publish('zlogger', '%s.%s.%s' % (data['e'], line_id, value['id']),
                                                                       json.dumps(msg_data))
                                                 break
@@ -175,10 +183,11 @@ def main(argv):
                                     if args.debug:
                                         print "Msec=%s,ID=%s,Line=%s,fwd=%s,meters=%s,mwh=%s,duration=%s,Elevation=%s,Speed=%s,HR=%s,monitor=%s" % params
                                     SQL = ('REPLACE INTO ' + table + ' (msec, riderid, ' + location_field + ', fwd, meters, mwh, duration, '
-                                            + 'elevation, speed, hr, monitorid, lpup, pup, cad, timestamp) '
-                                            + 'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s, %s);')
+                                            + 'elevation, speed, hr, monitorid, lpup, pup, cad, grp, timestamp) '
+                                            + 'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s, %s, %s);')
                                     params = params + (datetime.datetime.now(),)
                                     mycursor.execute(SQL, params)
+                                    dbh.commit()
                                 except KeyError:
                                     print "WARNING - POS Entry for unknown line: %s" % line
                             break
