@@ -327,6 +327,26 @@ def get_rider_list2(dbh, line_id, startDate, window):
             where time_ms between ? and ? and line_id=? order by time_ms asc'''
     c.execute(query, (startTime * 1000, retrievalTime * 1000, line_id))
     riders = {d[0]: None for d in c.fetchall()}
+    c.close()
+    return riders.keys()
+
+def get_event_module_riders(dbh, startDate, window):
+    if type(startDate) == int:
+        startTime = startDate - window
+    else:
+        startTime = time.mktime(startDate.timetuple()) - window
+    retrievalTime = startTime + (2 * window)
+    sleepTime = retrievalTime - time.time()
+    while sleepTime > 0:
+        print "Sleeping %s seconds (%s - %s)" % (sleepTime, retrievalTime, time.time())
+        time.sleep(sleepTime)
+        sleepTime = retrievalTime - time.time()
+    c = dbh.cursor()
+    query = '''select distinct riderid from live_results
+        where msec between %s and %s and grp > 0 order by msec asc'''
+    c.execute(query, (startTime * 1000, retrievalTime * 1000))
+    riders = {d[0]: None for d in c.fetchall()}
+    c.close()
     return riders.keys()
 
 def get_line(dbh, name):
@@ -356,8 +376,11 @@ def get_line_info(dbh, id):
         return data[0][0], data[0][1]
     return None, None
 
-def process_line(dbh, line_id, start_time, start_window, user, password, event_id = None, race_id=None):
-    L = get_rider_list2(dbh, line_id, start_time, start_window)
+def process_line(dbh, line_id, start_time, start_window, user, password, event_id = None, race_id=None, event_module=0):
+    if event_module:
+        L = get_event_module_riders(dbh, start_time, start_window)
+    else:
+        L = get_rider_list2(dbh, line_id, start_time, start_window)
     session = requests.session()
     line_name, race_corral_exit = get_line_info(dbh, line_id)
     access_token, refresh_token = login(session, user, password)
@@ -378,18 +401,18 @@ def run_server(dbh, args, user, password):
             now = time.time()
             cursor = dbh.cursor()
             cursor.execute('''select event_date, start_line_id, start_window, event_date + start_window as wake_time,
-                              title, event_id, race_id
+                              title, event_id, race_id, event_module
                               from event_detail where (event_date + start_window) > %s order by wake_time ASC limit 1''',
                            (last_retrieval,))
             sleep_time = 60
             for row in cursor.fetchall():
-                (event_date, start_line_id, start_window, wake_time, title, event_id, race_id) = row
+                (event_date, start_line_id, start_window, wake_time, title, event_id, race_id, event_module) = row
                 if wake_time <= now:
                     last_retrieval = wake_time
                     sleep_time = 0
                     print "Getting riders for %s" % title.encode('ascii', 'ignore')
                     process_line(dbh, start_line_id, event_date, start_window, user, password, event_id,
-                                 race_id if args.append_race_id else None)
+                                 race_id if args.append_race_id else None, event_module)
                 else:
                     sleep_time = min(wake_time - now, 60)
                     print("Next wake time in %s seconds for %s, sleeping %s seconds" % (wake_time - now, title.encode('ascii', 'ignore'), sleep_time))
