@@ -182,11 +182,13 @@ def main(argv):
                                                     i = 3
                                     if args.debug:
                                         print "Msec=%s,ID=%s,Line=%s,fwd=%s,meters=%s,mwh=%s,duration=%s,Elevation=%s,Speed=%s,HR=%s,monitor=%s" % params
-                                    SQL = ('REPLACE INTO ' + table + ' (msec, riderid, ' + location_field + ', fwd, meters, mwh, duration, '
-                                            + 'elevation, speed, hr, monitorid, lpup, pup, cad, grp, timestamp) '
-                                            + 'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s, %s, %s);')
+                                    SQL = ('INSERT INTO ' + table + ' (msec, riderid, ' + location_field + ', fwd, meters, mwh, duration, '
+                                           + 'elevation, speed, hr, monitorid, lpup, pup, cad, grp, timestamp) '
+                                           + 'VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, %s, %s, %s)'
+                                           + 'ON DUPLICATE KEY UPDATE msec=%s, riderid=%s,'+ location_field +'=%s, fwd=%s, meters=%s, mwh = %s,'
+                                           + 'duration=%s, elevation=%s, speed=%s, hr=%s, monitorid=%s, lpup=%s, pup=%s, cad=%s, grp=%s, timestamp=%s')
                                     params = params + (datetime.datetime.now(),)
-                                    mycursor.execute(SQL, params)
+                                    mycursor.execute(SQL, params + params)
                                     dbh.commit()
                                 except KeyError:
                                     print "WARNING - POS Entry for unknown line: %s" % line
@@ -199,12 +201,12 @@ def main(argv):
                                     mycursor.close()
                                     mycursor = None
                                 except:
-                                    pass
+                                    mycursor = None
                                 try:
                                     dbh.close()
                                     dbh = None
                                 except:
-                                    pass
+                                    dbh = None
                         except KeyError:
                             print "ERROR - unrecognized data: %s" % line
                             break
