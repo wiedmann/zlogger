@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 import sys, argparse, getpass
 import traceback
+from heapq import heappush, heappop
 
 import requests
 import json
-import sqlite3
 import os, time, stat
 import mkresults
 import mysql.connector
@@ -14,7 +14,6 @@ from collections import namedtuple
 from mysql.connector import errors as mysql_errors
 
 global args
-global dbh
 global mysqldbh
 
 def post_credentials(session, username, password):
@@ -78,6 +77,72 @@ def query_player_profile(session, access_token, player_id):
             print('Response HTTP Status Code: {status_code}'.format(
                 status_code=response.status_code))
             print('Response HTTP Response Body: {content}'.format(
+                content=response.content))
+
+        json_dict = json.loads(response.content)
+
+        return json_dict
+
+    except requests.exceptions.RequestException, e:
+        print('HTTP Request failed: %s' % e)
+
+def query_subgroup_profiles(session, access_token, subgroup_id):
+    # Query Player Profile
+    # GET https://us-or-rly101.zwift.com/api/profiles/<player_id>
+    try:
+        response = session.get(
+            url="https://us-or-rly101.zwift.com/api/events/subgroups/entrants/%s?participation=signed_up&registered_before=0&start=0&limit=0&type=all" % (subgroup_id,),
+            headers={
+                "Accept-Encoding": "gzip, deflate",
+                "Accept": "application/json",
+                "Connection": "keep-alive",
+                "Host": "us-or-rly101.zwift.com",
+                "User-Agent": "Zwift/115 CFNetwork/758.0.2 Darwin/15.0.0",
+                "Authorization": "Bearer %s" % access_token,
+                "Accept-Language": "en-us",
+            },
+            verify=args.verifyCert,
+        )
+
+        if args.verbose:
+            print('entrants Response HTTP Status Code: {status_code}'.format(
+                status_code=response.status_code))
+            print('entrants Response HTTP Response Body: {content}'.format(
+                content=response.content))
+
+        json_dict = []
+        try:
+            json_dict = json.loads(response.content)
+        except ValueError:
+            print "Can't parse response for subgroup %s:\n%s" % (subgroup_id, response.content)
+
+        return json_dict
+
+    except requests.exceptions.RequestException, e:
+        print('HTTP Request failed: %s' % e)
+
+def query_event_info(session, access_token, event_id):
+    # Query Player Profile
+    # GET https://us-or-rly101.zwift.com/api/profiles/<player_id>
+    try:
+        response = session.get(
+            url="https://us-or-rly101.zwift.com/api/events/%s" % (event_id,),
+            headers={
+                "Accept-Encoding": "gzip, deflate",
+                "Accept": "application/json",
+                "Connection": "keep-alive",
+                "Host": "us-or-rly101.zwift.com",
+                "User-Agent": "Zwift/115 CFNetwork/758.0.2 Darwin/15.0.0",
+                "Authorization": "Bearer %s" % access_token,
+                "Accept-Language": "en-us",
+            },
+            verify=args.verifyCert,
+        )
+
+        if args.verbose:
+            print('event Response HTTP Status Code: {status_code}'.format(
+                status_code=response.status_code))
+            print('event Response HTTP Response Body: {content}'.format(
                 content=response.content))
 
         json_dict = json.loads(response.content)
@@ -176,9 +241,23 @@ def login(session, user, password):
     access_token, refresh_token, expired_in = post_credentials(session, user, password)
     return access_token, refresh_token
 
-def updateRider(mysqldbh, dbh, session, access_token, user, event_id = None, race_id = None):
-    # Query Player Profile
+def updateRidersForSubgroup(mysqldbh, session, access_token, event_id=None, race_id=None, grp=0, zwift_event_id=None):
+    json_dict = query_subgroup_profiles(session, access_token, grp)
+    for entry in json_dict:
+        updateRider(mysqldbh, entry, event_id, race_id, grp, zwift_event_id)
+
+def updateRidersForEvent(mysqldbh, session, access_token, event_id=None, race_id=None, zwift_event_id=0):
+    json_dict = query_event_info(session, access_token, zwift_event_id)
+    for subgroup in json_dict['eventSubgroups']:
+        updateRidersForSubgroup(mysqldbh, session, access_token, event_id, race_id, subgroup['id'])
+
+def queryAndUpdateRider(mysqldbh, session, access_token, user, event_id=None, race_id=None, grp=0):
     json_dict = query_player_profile(session, access_token, user)
+    return updateRider(mysqldbh, json_dict, event_id, race_id, grp)
+
+
+def updateRider(mysqldbh, json_dict, event_id = None, race_id = None, grp=0, zwift_event_id=None):
+    # Query Player Profile
     if args.verbose:
         print ("\n")
         print (json_dict)
@@ -200,38 +279,21 @@ def updateRider(mysqldbh, dbh, session, access_token, user, event_id = None, rac
              json_dict["powerSourceModel"], fname.encode('ascii', 'ignore'), lname.encode('ascii', 'ignore')))
     except:
         pass
-    c = dbh.cursor() if dbh else None
-
     if mysqldbh:
         mycursor=mysqldbh.cursor()
     else:
         mycursor = None
-    try:
-        if mycursor:
-            SQL = '''REPLACE INTO rider_names (rider_id, fname, lname, age, weight, height, male, zpower, country_code, event, virtualBikeModel, achievementLevel, totalDistance, totalDistanceClimbed, totalTimeInMinutes, totalInKomJersey,totalInSprintersJersey, totalInOrangeJersey, totalWattHours, totalExperiencePoints)
-                      VALUES (%s,%s,TRIM(%s),%s,%s,%s,%s,%s,%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);'''
-            mycursor.execute(SQL, (json_dict["id"], fname.encode('ascii', 'ignore'), lname.encode('ascii', 'ignore'), json_dict["age"],
-                                   json_dict["weight"], json_dict["height"], male, power, json_dict["countryCode"],
-                                   event_id, json_dict["virtualBikeModel"],json_dict["achievementLevel"],
-                                   json_dict["totalDistance"],json_dict["totalDistanceClimbed"],json_dict["totalTimeInMinutes"],
-                                   json_dict["totalInKomJersey"],json_dict["totalInSprintersJersey"],json_dict["totalInOrangeJersey"],
-                                   json_dict["totalWattHours"],json_dict["totalExperiencePoints"]))
-        if c:
-            c.execute("insert into rider " +
-                "(rider_id, fname, lname, age, weight, height, male, zpower," +
-                " fetched_at) " +
-                "values (?,?,?,?,?,?,?,?,date('now'))",
-                 (json_dict["id"], fname, lname, json_dict["age"],
-                 json_dict["weight"], json_dict["height"], male, power))
-
-    except sqlite3.IntegrityError:
-        c.execute("update rider " +
-            "set fname = ?, lname = ?, age = ?, weight = ?, height = ?," +
-            " male = ?, zpower = ?, fetched_at = date('now')" +
-            " where rider_id = ?",
-             (fname, lname, json_dict["age"],
-             json_dict["weight"], json_dict["height"], male, power,
-             json_dict["id"]))
+    if mycursor:
+        SQL = '''REPLACE INTO rider_names (rider_id, fname, lname, age, weight, height, male, zpower, country_code, event, virtualBikeModel, achievementLevel, totalDistance, totalDistanceClimbed, totalTimeInMinutes, totalInKomJersey,totalInSprintersJersey, totalInOrangeJersey, totalWattHours, totalExperiencePoints, grp, zwift_event_id)
+                  VALUES (%s,%s,TRIM(%s),%s,%s,%s,%s,%s,%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);'''
+        mycursor.execute(SQL, (json_dict["id"], fname.encode('ascii', 'ignore'), lname.encode('ascii', 'ignore'), json_dict["age"],
+                               json_dict["weight"], json_dict["height"], male, power, json_dict["countryCode"],
+                               event_id, json_dict["virtualBikeModel"],json_dict["achievementLevel"],
+                               json_dict["totalDistance"],json_dict["totalDistanceClimbed"],json_dict["totalTimeInMinutes"],
+                               json_dict["totalInKomJersey"],json_dict["totalInSprintersJersey"],json_dict["totalInOrangeJersey"],
+                               json_dict["totalWattHours"],json_dict["totalExperiencePoints"], grp, zwift_event_id))
+        mysqldbh.commit()
+        mycursor.close()
 
 def valueIfExists(dict, key, defValue):
     if key in dict:
@@ -319,16 +381,12 @@ def get_rider_list2(dbh, line_id, startDate, window):
         time.sleep(sleepTime)
         sleepTime = retrievalTime - time.time()
     c = dbh.cursor()
-    if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
-        query = '''select riderid from live_results
+    query = '''select riderid, grp from live_results
             where msec between %s and %s and lineid = %s order by msec asc'''
-    else:
-        query = '''select rider_id from pos
-            where time_ms between ? and ? and line_id=? order by time_ms asc'''
     c.execute(query, (startTime * 1000, retrievalTime * 1000, line_id))
-    riders = {d[0]: None for d in c.fetchall()}
+    riders = {d[0]: d[1] for d in c.fetchall()}
     c.close()
-    return riders.keys()
+    return riders
 
 def get_event_module_riders(dbh, startDate, window):
     if type(startDate) == int:
@@ -342,21 +400,17 @@ def get_event_module_riders(dbh, startDate, window):
         time.sleep(sleepTime)
         sleepTime = retrievalTime - time.time()
     c = dbh.cursor()
-    query = '''select distinct riderid from live_results
+    query = '''select distinct riderid, grp from live_results
         where msec between %s and %s and grp > 0 order by msec asc'''
     c.execute(query, (startTime * 1000, retrievalTime * 1000))
-    riders = {d[0]: None for d in c.fetchall()}
+    riders = {d[0]: d[1] for d in c.fetchall()}
     c.close()
-    return riders.keys()
+    return riders
 
 def get_line(dbh, name):
     c = dbh.cursor()
-    if hasattr(dbh, '__module__') and dbh.__module__.startswith('mysql'):
-        query = 'select line from chalkline where name like %s'
-        exactquery = 'select line from chalkline where name = %s'
-    else:
-        query = 'select line_id from chalkline where name like ?'
-        exactquery = 'select line_id from chalkline where name = ?'
+    query = 'select line from chalkline where name like %s'
+    exactquery = 'select line from chalkline where name = %s'
     c.execute(exactquery, (name,))
     data = c.fetchall()
     if not data:
@@ -384,10 +438,39 @@ def process_line(dbh, line_id, start_time, start_window, user, password, event_i
     session = requests.session()
     line_name, race_corral_exit = get_line_info(dbh, line_id)
     access_token, refresh_token = login(session, user, password)
-    for id in L:
-        updateRider(dbh, None, session, access_token, id, event_id if race_corral_exit else None,
-                    race_id if race_corral_exit else None)
+    for (id, grp) in L.items():
+        queryAndUpdateRider(dbh, session, access_token, id, event_id if race_corral_exit else None,
+                    race_id if race_corral_exit else None, grp=grp)
     logout(session, refresh_token)
+
+
+def get_subgroup_retrieval_times(dbh, start_time):
+    start_delay = 60
+    retrieval_times = [0, 900, 1800, 2700, 3600, 4500, 5400]
+
+    c = dbh.cursor()
+    retrieval_time = start_time - (retrieval_times[-1] + start_delay)
+    query = '''select zes.id, unix_timestamp(zes.eventSubgroupStart) as start_time, ze.name as event_name, ze.id
+               from zwift_event_subgroups zes, zwift_events ze where zes.zwift_event_id = ze.id
+               and zes.eventSubgroupStart > from_unixtime(%s) and zes.eventSubgroupStart < from_unixtime(%s)
+               order by start_time asc'''
+    c.execute(query, (retrieval_time, retrieval_time + 7200))
+    subgroup_retrievals = []
+    for row in c.fetchall():
+        (subgroup_id, subgroup_start_time, event_name, zwift_event_id) = row
+        if 'race' in event_name.lower():
+            for rt in retrieval_times:
+                subgroup_retrieval_time = subgroup_start_time + start_delay + rt
+                if subgroup_retrieval_time > start_time:
+                    heappush(subgroup_retrievals, (subgroup_start_time + start_delay + rt, (subgroup_id, event_name, zwift_event_id)))
+        else:
+            subgroup_retrieval_time = subgroup_start_time + start_delay
+            if subgroup_retrieval_time > start_time:
+                heappush(subgroup_retrievals, (subgroup_start_time + start_delay, (subgroup_id, event_name, zwift_event_id)))
+
+    c.close()
+    return subgroup_retrievals
+
 
 def run_server(dbh, args, user, password):
     if args.time:
@@ -399,23 +482,49 @@ def run_server(dbh, args, user, password):
     while True:
         try:
             now = time.time()
+            retrieval_times = get_subgroup_retrieval_times(dbh, last_retrieval)
             cursor = dbh.cursor()
             cursor.execute('''select event_date, start_line_id, start_window, event_date + start_window as wake_time,
-                              title, event_id, race_id, event_module
-                              from event_detail where (event_date + start_window) > %s order by wake_time ASC limit 1''',
+                              title, event_id, race_id, event_module, zwift_event_id
+                              from event_detail where (event_date + start_window) > %s order by wake_time ASC limit 10''',
                            (last_retrieval,))
             sleep_time = 60
             for row in cursor.fetchall():
-                (event_date, start_line_id, start_window, wake_time, title, event_id, race_id, event_module) = row
-                if wake_time <= now:
-                    last_retrieval = wake_time
-                    sleep_time = 0
-                    print "Getting riders for %s" % title.encode('ascii', 'ignore')
+                (event_date, start_line_id, start_window, wake_time, title, event_id, race_id, event_module, zwift_event_id) = row
+                if not zwift_event_id:
+                    heappush(retrieval_times, (wake_time, [title, start_line_id, event_date, start_window, event_id, race_id, event_module]))
+            last_processed = None
+            while retrieval_times and retrieval_times[0][0] <= now:
+                wake_time, data = heappop(retrieval_times)
+                zwift_event_id = None
+                if type(data) is list:
+                    (title, start_line_id, event_date, start_window, event_id, race_id, event_module) = data
+                else:
+                    (grp, title, zwift_event_id) = data
+                print "Getting riders for %s" % title.encode('ascii', 'ignore')
+                if grp:
+                    session = requests.session()
+                    access_token, refresh_token = login(session, user, password)
+                    updateRidersForSubgroup(dbh, session, access_token, 0,
+                                         race_id if args.append_race_id else None, grp, zwift_event_id)
+                else:
                     process_line(dbh, start_line_id, event_date, start_window, user, password, event_id,
                                  race_id if args.append_race_id else None, event_module)
+                last_processed = wake_time
+            if last_processed:
+                last_retrieval = last_processed
+            else:
+                last_retrieval = now
+            if retrieval_times:
+                wake_time, data = retrieval_times[0]
+                if type(data) is list:
+                    (title, start_line_id, event_date, start_window, event_id, race_id, event_module) = data
                 else:
-                    sleep_time = min(wake_time - now, 60)
-                    print("Next wake time in %s seconds for %s, sleeping %s seconds" % (wake_time - now, title.encode('ascii', 'ignore'), sleep_time))
+                    (grp, title, zwift_event_id) = data
+                sleep_time = min(sleep_time, wake_time - now)
+                print("Next wake time in %s seconds for %s, sleeping %s seconds" % (wake_time - now, title.encode('ascii', 'ignore'), sleep_time))
+            else:
+                print("No races in near future, sleeping %s seconds" % sleep_time)
             if sleep_time > 0:
                 time.sleep(sleep_time)
         except mysql_errors.Error:
@@ -446,7 +555,6 @@ def main(argv):
             help='populate zwift rider_id to strava athlete_id mapping')
     parser.add_argument('idlist', metavar='rider_id', type=int, nargs='*',
             help='rider ids to fetch')
-    parser.add_argument('--database', default='race_database.sql3')
     parser.add_argument('-D', '--mysql_database', help='mysql database (overrides --database)')
     parser.add_argument('-H', '--mysql_host', help='mysql host')
     parser.add_argument('-U', '--mysql_user', help='mysql user')
@@ -461,6 +569,8 @@ def main(argv):
                         action="store_true")
     parser.add_argument('--race_id')
     parser.add_argument('--event_id')
+    parser.add_argument('--subgroup_id', help="The zwift subgroup ID to query")
+    parser.add_argument('--zwift_event_id', help="The zwift event ID to query")
     args = parser.parse_args()
 
     if args.user:
@@ -486,48 +596,46 @@ def main(argv):
     if args.mysql_database:
         racedbh = open_mysql(args)
         using_mysql = True
-    else:
-        racedbh = sqlite3.connect(args.database)
-        using_mysql = False
     if args.server:
         run_server(racedbh, args, args.user, password)
         exit()
     if args.config:
         L = get_rider_list(racedbh)
     elif args.idlist:
-        L = args.idlist
+        L = {id:0 for id in args.idlist}
     elif args.line:
         if args.time:
             startDate = dateutil.parser.parse(args.time)
         else:
             startDate = datetime.datetime.now()
         L = get_rider_list2(racedbh, get_line(racedbh, args.line), startDate, args.window)
+    elif args.subgroup_id or args.zwift_event_id:
+        L = None
     else:
-        L = [int(line) for line in sys.stdin]
+        L = {int(line):0 for line in sys.stdin}
 
     if args.verbose:
         print 'Selected %d riders' % len(L)
 
     access_token, refresh_token = login(session, args.user, password)
 
-    if not args.no_profile:
-        dbh = sqlite3.connect('rider_names.sql3')
-        for id in L:
-            updateRider(racedbh if using_mysql else None, dbh, session, access_token, id, args.event_id, args.race_id)
-        dbh.commit()
-        dbh.close()
+    if L:
+        if not args.no_profile:
+            for (id, grp) in L.items():
+                queryAndUpdateRider(racedbh, session, access_token, id, args.event_id, args.race_id, grp)
 
-    if args.query_strava_athlete_id:
-        # query rider's strava athlete id and other details if optionally
-        # matching the specified required tag in config
-        required_tag = None
-        if args.config:
-            required_tag = mkresults.config(args.config).required_tag
+        if args.query_strava_athlete_id:
+            # query rider's strava athlete id and other details if optionally
+            # matching the specified required tag in config
+            required_tag = None
+            if args.config:
+                required_tag = mkresults.config(args.config).required_tag
 
-        dbh = sqlite3.connect('results_history.sql3')
-        updateStravaId(racedbh, session, access_token, strava_access_token, L, required_tag)
-        dbh.commit()
-        dbh.close()
+            updateStravaId(racedbh, session, access_token, strava_access_token, L, required_tag)
+    elif args.subgroup_id:
+        updateRidersForSubgroup(racedbh, session, access_token, args.event_id, args.race_id, args.subgroup_id)
+    elif args.zwift_event_id:
+        updateRidersForEvent(racedbh, session, access_token, args.event_id, args.race_id, args.zwift_event_id)
 
     logout(session, refresh_token)
 
