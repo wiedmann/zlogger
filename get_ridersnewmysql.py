@@ -286,7 +286,7 @@ def updateRider(mysqldbh, json_dict, event_id = None, race_id = None, grp=0, zwi
     if mycursor:
         SQL = '''REPLACE INTO rider_names (rider_id, fname, lname, age, weight, height, male, zpower, country_code, event, virtualBikeModel, achievementLevel, totalDistance, totalDistanceClimbed, totalTimeInMinutes, totalInKomJersey,totalInSprintersJersey, totalInOrangeJersey, totalWattHours, totalExperiencePoints, grp, zwift_event_id)
                   VALUES (%s,%s,TRIM(%s),%s,%s,%s,%s,%s,%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);'''
-        mycursor.execute(SQL, (json_dict["id"], fname.encode('ascii', 'ignore'), lname.encode('ascii', 'ignore'), json_dict["age"],
+        mycursor.execute(SQL, (json_dict["id"], fname.encode('utf-8', 'ignore'), lname.encode('utf-8', 'ignore'), json_dict["age"],
                                json_dict["weight"], json_dict["height"], male, power, json_dict["countryCode"],
                                event_id, json_dict["virtualBikeModel"],json_dict["achievementLevel"],
                                json_dict["totalDistance"],json_dict["totalDistanceClimbed"],json_dict["totalTimeInMinutes"],
@@ -642,7 +642,7 @@ def main(argv):
 
 def open_mysql(args):
     return mysql.connector.connect(user=args.mysql_user, password=args.mysql_password, database=args.mysql_database,
-                                   host=args.mysql_host, autocommit=True)
+                                   host=args.mysql_host, autocommit=True, charset="utf8mb4")
 
 
 if __name__ == '__main__':
